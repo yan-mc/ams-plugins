@@ -1,0 +1,8 @@
+# AMS music-bundle patch layer (M0.6 minimal loop)
+# 插入 Host 插件（工具 + /ams/api 桥接路由）与 Client 插件（整页 + 侧栏入口）。
+# 说明：product.patch.yml（遥测/账号/危险行禁用）属于内核层，不在 M0.6 范围内。
+- insert:
+    - id: ams-plugin-core
+      name: '@ams/plugin-core'
+    - id: ams-plugin-ui
+      name: '@ams/plugin-ui'

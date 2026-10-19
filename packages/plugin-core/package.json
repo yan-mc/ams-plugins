@@ -1,0 +1,34 @@
+{
+  "name": "@ams/plugin-core",
+  "version": "0.1.2",
+  "type": "module",
+  "description": "AMS Host plugin: music_ping / music_job_submit tools + Gateway bridge routes (M0.6)",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": "0.2.1-rc.2"
+  },
+  "ams": {
+    "pluginId": "ams.plugin.core",
+    "kind": "host",
+    "pages": [],
+    "tools": [
+      "music_ping",
+      "music_job_submit"
+    ],
+    "permissions": [
+      "network",
+      "files.read"
+    ]
+  }
+}

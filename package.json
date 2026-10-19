@@ -1,0 +1,14 @@
+{
+  "name": "@ams/plugins-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AMS music plugins workspace (M0.6 minimal loop)",
+  "license": "MIT",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "clean": "node tools/build.mjs --clean",
+    "pack": "node tools/build.mjs --pack",
+    "verify": "node tools/verify-m0.6.mjs"
+  }
+}
