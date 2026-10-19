@@ -1,6 +1,6 @@
 {
   "name": "@ams/plugin-ui",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "description": "AMS Client plugin: full-page AMS console (Gateway health / jobs / progress) + sidebar entry (M0.6)",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "tools": [],
     "permissions": [
       "network"
-    ]
+    ],
+    "hardened": "M1: bearer/session auth + SSE"
   }
 }

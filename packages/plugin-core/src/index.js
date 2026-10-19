@@ -1,28 +1,36 @@
 /**
- * AMS plugin-core (Host): model-facing tools + local HTTP bridge routes.
+ * AMS plugin-core (Host): model-facing tools + authenticated local bridge routes.
  *
- * Tools:
- * - music_ping: verifies the plugin and Gateway wiring.
- * - music_job_submit: submits a Gateway job (type=ping | mock.long), returns the job id.
- * - music_job_status: reads one Gateway job.
+ * M1 (task-22) hardening:
+ * - Every /ams/api/* request needs a credential: either
+ *   (a) Authorization: Bearer <gateway token> for machine callers, or
+ *   (b) a short-lived HttpOnly same-origin session cookie issued by
+ *       GET /ams/api/session for the browser page.
+ * - GET /ams/api/jobs/{id}/events pipes the Gateway SSE stream through, so the
+ *   browser page can use EventSource instead of polling.
  *
- * Routes (consumed by @ams/plugin-ui, loopback only in this M0.6 version):
- * - GET  /ams/api/summary  -> plugin info + Gateway health + recent jobs + registered tools
- * - GET  /ams/api/health   -> Gateway /health passthrough
- * - GET  /ams/api/jobs     -> Gateway /jobs passthrough
- * - POST /ams/api/jobs     -> Gateway job creation passthrough
+ * The Gateway token never leaves this Host process.
  */
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
 export const name = 'ams-plugin-core'
 export const inject = ['tools', 'webServer']
 
-const PLUGIN_VERSION = '0.1.2'
+const PLUGIN_VERSION = '0.2.0'
 const ROUTE_PREFIX = '/ams/api'
 const TOOL_NAMES = ['music_ping', 'music_job_submit', 'music_job_status']
+const SESSION_COOKIE = 'ams_bridge'
+const SESSION_TTL_MS = 30 * 60 * 1000
+const SESSION_MAX = 128
+const SSE_HEARTBEAT_MS = 15000
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
+
+/** In-memory browser sessions: token -> { createdAt, expiresAt, lastSeen }. */
+const sessions = new Map()
 
 /** Resolve AMS_HOME from the environment; fall back to the product default. */
 function resolveAmsHome() {
@@ -63,13 +71,9 @@ async function gatewayRequest(path, options) {
   return body
 }
 
-/** Gateway health probe used by tools and the UI summary route. */
 function gatewayHealth() { return gatewayRequest('/health') }
-
-/** Recent Gateway jobs (newest first, server order). */
 function gatewayJobs(limit) { return gatewayRequest('/jobs?limit=' + String(limit)) }
-
-/** Submit one Gateway job. */
+function gatewayJob(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId)) }
 function gatewaySubmit(type, params) {
   return gatewayRequest('/jobs', {
     method: 'POST',
@@ -79,11 +83,12 @@ function gatewaySubmit(type, params) {
 }
 
 /** Write a JSON response. */
-function sendJson(res, status, value) {
+function sendJson(res, status, value, extraHeaders) {
   const text = JSON.stringify(value)
   res.statusCode = status
   res.setHeader('content-type', 'application/json; charset=utf-8')
   res.setHeader('cache-control', 'no-store')
+  if (extraHeaders) { for (const key of Object.keys(extraHeaders)) res.setHeader(key, extraHeaders[key]) }
   res.end(text)
 }
 
@@ -102,6 +107,185 @@ async function readJsonBody(req) {
 
 /** Build one model-facing text payload. */
 function textResult(text) { return [{ type: 'text', text }] }
+
+/** Constant-time string comparison; length mismatch still burns a comparison. */
+function constantTimeEqual(left, right) {
+  const a = Buffer.from(String(left))
+  const b = Buffer.from(String(right))
+  if (a.length !== b.length) { timingSafeEqual(a, Buffer.alloc(a.length)); return false }
+  return timingSafeEqual(a, b)
+}
+
+/** Parse a Cookie header into a plain map (no decode failures thrown). */
+function parseCookies(header) {
+  const result = {}
+  if (typeof header !== 'string' || header === '') return result
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=')
+    if (index <= 0) continue
+    const key = part.slice(0, index).trim()
+    if (key === '') continue
+    try { result[key] = decodeURIComponent(part.slice(index + 1).trim()) } catch { result[key] = part.slice(index + 1).trim() }
+  }
+  return result
+}
+
+/** Drop expired sessions and keep the store bounded. */
+function pruneSessions(now) {
+  for (const [token, record] of sessions) { if (record.expiresAt <= now) sessions.delete(token) }
+  while (sessions.size >= SESSION_MAX) {
+    const first = sessions.keys().next()
+    if (first.done) break
+    sessions.delete(first.value)
+  }
+}
+
+/** Issue one browser session token and remember it. */
+function issueSession(now) {
+  pruneSessions(now)
+  const token = randomBytes(32).toString('base64url')
+  sessions.set(token, { createdAt: now, expiresAt: now + SESSION_TTL_MS, lastSeen: now })
+  return token
+}
+
+/** Check one browser session token; expired tokens are removed. */
+function validSession(token, now) {
+  if (typeof token !== 'string' || token === '') return false
+  const record = sessions.get(token)
+  if (record === undefined) return false
+  if (record.expiresAt <= now) { sessions.delete(token); return false }
+  record.lastSeen = now
+  return true
+}
+
+/** Extract the Bearer token from an Authorization header, if present. */
+function bearerOf(req) {
+  const raw = String(req.headers.authorization || '')
+  if (!raw.startsWith('Bearer ')) return undefined
+  return raw.slice('Bearer '.length).trim()
+}
+
+/** Verify a machine credential against the Gateway token (constant time). */
+function gatewayTokenValid(token) {
+  if (typeof token !== 'string' || token === '') return false
+  try { return constantTimeEqual(token, readGatewayInfo().token) } catch { return false }
+}
+
+/** Host header hostname, normalizing IPv6 brackets. */
+function hostnameOf(hostHeader) {
+  const value = String(hostHeader || '').toLowerCase()
+  if (value === '') return ''
+  if (value.startsWith('[')) {
+    const end = value.indexOf(']')
+    return end > 0 ? value.slice(0, end + 1) : value
+  }
+  const index = value.indexOf(':')
+  return index < 0 ? value : value.slice(0, index)
+}
+
+/** Require a loopback Host header; rejects DNS-rebinding style hosts. */
+function loopbackHost(hostHeader) {
+  return LOOPBACK_HOSTS.has(hostnameOf(hostHeader))
+}
+
+/** Same-origin gate for issuing browser sessions. */
+function sameOriginRequest(req) {
+  const host = String(req.headers.host || '')
+  if (!loopbackHost(host)) return false
+  const fetchSite = String(req.headers['sec-fetch-site'] || '')
+  if (fetchSite !== '' && fetchSite !== 'same-origin' && fetchSite !== 'none') return false
+  const origin = req.headers.origin
+  if (typeof origin === 'string' && origin !== '') {
+    try { const url = new URL(origin); return url.host === host || url.hostname === hostnameOf(host) } catch { return false }
+  }
+  const referer = req.headers.referer
+  if (typeof referer === 'string' && referer !== '') {
+    try { const url = new URL(referer); return url.host === host || url.hostname === hostnameOf(host) } catch { return false }
+  }
+  return true
+}
+
+/** Resolve the caller credential kind: bearer | session | none. */
+function authKind(req) {
+  if (gatewayTokenValid(bearerOf(req))) return 'bearer'
+  const cookies = parseCookies(req.headers.cookie)
+  if (validSession(cookies[SESSION_COOKIE], Date.now())) return 'session'
+  return 'none'
+}
+
+/** 401 response for a missing/invalid credential. */
+function sendUnauthorized(res, requestPath) {
+  sendJson(res, 401, {
+    ok: false,
+    error: { code: 'AMS_UNAUTHORIZED', message: 'Missing or invalid credential for ' + requestPath }
+  }, {
+    'www-authenticate': 'Bearer realm="ams", error="invalid_token"'
+  })
+}
+
+/** Pipe one Gateway SSE stream to the browser response. */
+async function pipeEvents(req, res, jobId) {
+  const info = readGatewayInfo()
+  const headers = { authorization: 'Bearer ' + info.token, accept: 'text/event-stream' }
+  const lastEventId = req.headers['last-event-id']
+  if (typeof lastEventId === 'string' && lastEventId !== '') headers['last-event-id'] = lastEventId
+  const upstream = await fetch(info.base + '/jobs/' + encodeURIComponent(jobId) + '/events', { headers })
+  res.statusCode = upstream.status
+  res.setHeader('content-type', upstream.headers.get('content-type') || 'text/event-stream; charset=utf-8')
+  res.setHeader('cache-control', 'no-cache, no-transform')
+  res.setHeader('connection', 'keep-alive')
+  res.setHeader('x-accel-buffering', 'no')
+  if (!upstream.ok) {
+    res.end('event: error\ndata: {"code":"AMS_UPSTREAM_ERROR","status":' + String(upstream.status) + '}\n\n')
+    return
+  }
+  const reader = upstream.body.getReader()
+  let closed = false
+  let heartbeat = null
+  const close = () => {
+    if (closed) return
+    closed = true
+    if (heartbeat !== null) clearInterval(heartbeat)
+    try { reader.cancel() } catch { /* the upstream body may already be gone */ }
+  }
+  heartbeat = setInterval(() => {
+    if (closed) return
+    try { res.write(': keepalive\n\n') } catch { close() }
+  }, SSE_HEARTBEAT_MS)
+  req.on('close', close)
+  res.on('close', close)
+  try {
+    while (!closed) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      if (chunk.value !== undefined && !closed) res.write(Buffer.from(chunk.value))
+    }
+  } catch {
+    // Upstream disconnect: close the browser stream so EventSource reconnects.
+  } finally {
+    close()
+    try { res.end() } catch { /* response may already be destroyed */ }
+  }
+}
+
+/** Build the UI summary payload. */
+async function summaryPayload(auth) {
+  const info = readGatewayInfo()
+  const result = { plugin: '@ams/plugin-core', pluginVersion: PLUGIN_VERSION, time: new Date().toISOString(), auth, tools: TOOL_NAMES, gateway: { ok: false, base: info.base }, jobs: [], jobListError: null }
+  try {
+    const health = await gatewayHealth()
+    result.gateway = { ok: true, base: info.base, status: String(health.status || 'ok'), version: health.version || null, job_types: health.job_types || null }
+  } catch (error) {
+    result.gateway.error = String(error && error.message ? error.message : error)
+  }
+  try {
+    const list = await gatewayJobs(20)
+    result.jobs = Array.isArray(list) ? list : (Array.isArray(list.data) ? list.data : (Array.isArray(list.jobs) ? list.jobs : []))
+  } catch (error) {
+    result.jobListError = String(error && error.message ? error.message : error)
+  }
+  return result
+}
 
 export function apply(ctx) {
   const logger = ctx.logger
@@ -132,12 +316,7 @@ export function apply(ctx) {
     async execute(args) {
       const info = readGatewayInfo()
       let gatewayStatus = 'unknown'
-      try {
-        const health = await gatewayHealth()
-        gatewayStatus = String(health && health.status ? health.status : 'ok')
-      } catch (error) {
-        gatewayStatus = 'error: ' + String(error && error.message ? error.message : error)
-      }
+      try { const health = await gatewayHealth(); gatewayStatus = String(health && health.status ? health.status : 'ok') } catch (error) { gatewayStatus = 'error: ' + String(error && error.message ? error.message : error) }
       return {
         ok: gatewayStatus === 'ok',
         plugin: '@ams/plugin-core',
@@ -152,7 +331,7 @@ export function apply(ctx) {
 
   const submitTool = defineTool({
     name: 'music_job_submit',
-    description: 'Submit an AMS Gateway job. type=ping runs a fast mock job; type=mock.long runs a cancellable long mock job. Returns the Gateway job id; poll with music_job_status.',
+    description: 'Submit an AMS Gateway job. type=ping runs a fast mock job; type=mock.long runs a cancellable long mock job. Returns the Gateway job id; poll with music_job_status or watch /ams/api/jobs/{id}/events.',
     parameters: {
       type: { type: 'string', required: true, enum: ['ping', 'mock.long'], description: 'Gateway job type.' },
       seconds: { type: 'number', description: 'mock.long duration in seconds (0.2-300).' },
@@ -209,7 +388,7 @@ export function apply(ctx) {
       render: (_args, value) => textResult('Job ' + value.id + ': ' + value.status + ' progress=' + String(value.progress) + (value.stage ? ' stage=' + value.stage : ''))
     },
     async execute(args) {
-      const job = await gatewayRequest('/jobs/' + encodeURIComponent(args.job_id))
+      const job = await gatewayJob(args.job_id)
       return {
         id: String(job.id),
         type: String(job.type),
@@ -226,64 +405,60 @@ export function apply(ctx) {
   ctx.effect(() => ctx.tools.register(statusTool), 'ams-plugin-core: music_job_status')
   log('registered tools: ' + TOOL_NAMES.join(', '))
 
-  const summary = async () => {
-    const info = readGatewayInfo()
-    let gateway = { ok: false, base: info.base, status: 'unknown', error: null }
-    let jobs = []
-    let jobListError = null
-    try {
-      const health = await gatewayHealth()
-      gateway = { ok: true, base: info.base, status: String(health.status || 'ok'), version: health.version || null, job_types: health.job_types || null }
-    } catch (error) {
-      gateway.error = String(error && error.message ? error.message : error)
-    }
-    try {
-      const list = await gatewayJobs(20)
-      jobs = Array.isArray(list) ? list : (Array.isArray(list.data) ? list.data : (Array.isArray(list.jobs) ? list.jobs : []))
-    } catch (error) {
-      jobListError = String(error && error.message ? error.message : error)
-    }
-    return {
-      plugin: '@ams/plugin-core',
-      pluginVersion: PLUGIN_VERSION,
-      time: new Date().toISOString(),
-      tools: TOOL_NAMES,
-      gateway,
-      jobs,
-      jobListError
-    }
-  }
-
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: ROUTE_PREFIX,
     handler: async (req, res) => {
       try {
         const pathname = new URL(String(req.url), 'http://localhost').pathname
-        if (pathname === ROUTE_PREFIX + '/summary' && req.method === 'GET') {
-          sendJson(res, 200, await summary())
+        const parts = pathname.split('/').filter(part => part !== '')
+        if (parts[0] !== 'ams' || parts[1] !== 'api') { sendJson(res, 404, { ok: false, error: { code: 'AMS_NOT_FOUND', message: 'unknown route: ' + pathname } }); return }
+        const rest = parts.slice(2)
+        const requestPath = ROUTE_PREFIX + (rest.length > 0 ? '/' + rest.join('/') : '')
+
+        // Only unauthenticated endpoint: browser session bootstrap.
+        if (rest.length === 1 && rest[0] === 'session') {
+          if (req.method !== 'GET') { sendJson(res, 405, { ok: false, error: { code: 'AMS_METHOD_NOT_ALLOWED', message: 'GET only' } }); return }
+          if (!sameOriginRequest(req)) {
+            log('session denied (cross-origin or non-loopback host) host=' + String(req.headers.host || '') + ' origin=' + String(req.headers.origin || ''))
+            sendJson(res, 403, { ok: false, error: { code: 'AMS_CROSS_ORIGIN', message: 'session issuance requires a loopback same-origin request' } })
+            return
+          }
+          const token = issueSession(Date.now())
+          const cookie = SESSION_COOKIE + '=' + token + '; HttpOnly; SameSite=Strict; Path=' + ROUTE_PREFIX + '; Max-Age=' + String(Math.floor(SESSION_TTL_MS / 1000))
+          sendJson(res, 200, { ok: true, auth: 'session', expiresInSec: Math.floor(SESSION_TTL_MS / 1000), cookie: SESSION_COOKIE }, { 'set-cookie': cookie })
           return
         }
-        if (pathname === ROUTE_PREFIX + '/health' && req.method === 'GET') {
-          sendJson(res, 200, await gatewayHealth())
-          return
-        }
-        if (pathname === ROUTE_PREFIX + '/jobs' && req.method === 'GET') {
-          sendJson(res, 200, await gatewayJobs(50))
-          return
-        }
-        if (pathname === ROUTE_PREFIX + '/jobs' && req.method === 'POST') {
+
+        // Everything else requires bearer token or a valid browser session.
+        const auth = authKind(req)
+        if (auth === 'none') { sendUnauthorized(res, requestPath); return }
+
+        const joined = rest.join('/')
+        if (joined === 'summary' && req.method === 'GET') { sendJson(res, 200, await summaryPayload(auth)); return }
+        if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
+        if (joined === 'jobs' && req.method === 'GET') { sendJson(res, 200, await gatewayJobs(50)); return }
+        if (joined === 'jobs' && req.method === 'POST') {
           const body = await readJsonBody(req)
           const type = body && typeof body.type === 'string' && body.type !== '' ? body.type : 'ping'
           const params = body && typeof body.params === 'object' && body.params !== null ? body.params : {}
           sendJson(res, 201, await gatewaySubmit(type, params))
           return
         }
-        sendJson(res, 404, { ok: false, error: { code: 'AMS_NOT_FOUND', message: 'unknown AMS route: ' + pathname } })
+        if (rest.length === 3 && rest[0] === 'jobs' && rest[2] === 'events' && req.method === 'GET') {
+          await pipeEvents(req, res, rest[1])
+          return
+        }
+        if (rest.length === 2 && rest[0] === 'jobs' && req.method === 'GET') {
+          sendJson(res, 200, await gatewayJob(rest[1]))
+          return
+        }
+        sendJson(res, 404, { ok: false, error: { code: 'AMS_NOT_FOUND', message: 'unknown route: ' + requestPath } })
       } catch (error) {
-        sendJson(res, 502, { ok: false, error: { code: 'AMS_GATEWAY_ERROR', message: String(error && error.message ? error.message : error) } })
+        if (!res.headersSent) sendJson(res, 502, { ok: false, error: { code: 'AMS_GATEWAY_ERROR', message: String(error && error.message ? error.message : error) } })
+        else { try { res.end() } catch { /* response already gone */ } }
       }
     }
-  }), 'ams-plugin-core: GET/POST ' + ROUTE_PREFIX)
-  log('registered routes: ' + ROUTE_PREFIX + '/summary|health|jobs')
+  }), 'ams-plugin-core: authenticated ' + ROUTE_PREFIX)
+  log('registered authenticated routes: ' + ROUTE_PREFIX + '/session|summary|health|jobs|jobs/{id}|jobs/{id}/events')
 }
