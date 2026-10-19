@@ -123,7 +123,7 @@ try {
   $cookieSummary = Invoke-WebRequest -Uri ($base + '/ams/api/summary') -UseBasicParsing -SkipHttpErrorCheck -WebSession $browserSession -TimeoutSec 10
   $cookieBody = $null
   try { $cookieBody = $cookieSummary.Content | ConvertFrom-Json } catch { $cookieBody = $null }
-  Check 'auth: session cookie 200' (($cookieSummary.StatusCode -eq 200) -and $cookieBody -and ($cookieBody.tools.Count -eq 3) -and ($cookieBody.auth -eq 'session')) ('HTTP ' + $cookieSummary.StatusCode + ', auth=' + $(if ($cookieBody) { $cookieBody.auth } else { '?' }))
+  Check 'auth: session cookie 200' (($cookieSummary.StatusCode -eq 200) -and $cookieBody -and ($cookieBody.tools.Count -eq 5) -and ($cookieBody.auth -eq 'session')) ('HTTP ' + $cookieSummary.StatusCode + ', auth=' + $(if ($cookieBody) { $cookieBody.auth } else { '?' }))
 
   try {
     $bearer = Invoke-WebRequest -Uri ($base + '/ams/api/summary') -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 10 -Headers @{ Authorization = 'Bearer ' + $gatewayToken }
@@ -132,14 +132,40 @@ try {
     Check 'auth: bearer 200' (($bearer.StatusCode -eq 200) -and $bearerBody -and ($bearerBody.auth -eq 'bearer')) ('HTTP ' + $bearer.StatusCode)
   } catch { Check 'auth: bearer 200' $false $_.Exception.Message }
 
-  # --- M1 SSE check (independent helper, also re-checks 401/403/201) ---
+  # --- M1 pages: tool set + Gateway job types + convert submit passthrough ---
+  $toolNames = ''
+  if ($cookieBody -and $cookieBody.tools) { $toolNames = ($cookieBody.tools -join ',') }
+  Check 'tools: 5 registered' ($toolNames -eq 'music_ping,music_job_submit,music_job_status,music_job_list,music_job_cancel') $toolNames
+  $jobTypes = @()
+  if ($cookieBody -and $cookieBody.jobTypes) { $jobTypes = $cookieBody.jobTypes | ForEach-Object { $_.type } }
+  Check 'job types exposed' (($jobTypes -contains 'ping') -and ($jobTypes -contains 'mock.long')) (($jobTypes -join ','))
+
+  try {
+    $convert = Invoke-WebRequest -Uri ($base + '/ams/api/jobs') -Method Post -UseBasicParsing -SkipHttpErrorCheck -WebSession $browserSession -TimeoutSec 10 -ContentType 'application/json' -Body '{"type":"convert.rvc","params":{"input_path":"F:/AMS/input/demo.wav","voice":"曼波","pitch":0}}'
+    $convertBody = $null; try { $convertBody = $convert.Content | ConvertFrom-Json } catch { $convertBody = $null }
+    $convertMsg = ''
+    if ($convertBody -and $convertBody.error) { $convertMsg = [string]$convertBody.error.message }
+    $convertJobId = ''
+    if ($convertBody -and $convertBody.id) { $convertJobId = [string]$convertBody.id }
+    $convertOk = $false
+    if ($convert.StatusCode -eq 201) { $convertOk = $true }
+    elseif ($convert.StatusCode -eq 502) {
+      $convertOk = ($convertBody.error.code -eq 'AMS_GATEWAY_ERROR') -and (($convertMsg -match 'UNKNOWN_JOB_TYPE') -or ($convertMsg -match '422') -or ($convertMsg -match '未知任务类型'))
+    }
+    Check 'convert.rvc submit path' $convertOk ('HTTP ' + $convert.StatusCode + ', job=' + $convertJobId + ', ' + $convertMsg)
+    if ($convertJobId -ne '') {
+      try { $null = Invoke-WebRequest -Uri ($base + '/ams/api/jobs/' + $convertJobId + '/cancel') -Method Post -UseBasicParsing -SkipHttpErrorCheck -WebSession $browserSession -TimeoutSec 10 } catch { }
+    }
+  } catch { Check 'convert.rvc submit path' $false $_.Exception.Message }
+
+  # --- M1 SSE check (independent helper, also re-checks 401/403/201/cancel) ---
   $sseOut = Join-Path $logs 'verify-sse.json'
   Push-Location $PluginsDir
   & node (Join-Path $PluginsDir 'tools/verify-sse.mjs') $base *> $sseOut
   $sseExit = $LASTEXITCODE
   Pop-Location
   $sse = Get-Content -Raw $sseOut | ConvertFrom-Json
-  Check 'sse: passthrough events' ($sseExit -eq 0 -and $sse.pass -eq $true) ('events=' + $sse.sseEventCount + ', terminal=' + $sse.terminalStatus + ', unauthSse=' + $sse.unauthSseStatus)
+  Check 'sse: events + cancel' ($sseExit -eq 0 -and $sse.pass -eq $true) ('events=' + $sse.sseEventCount + ', terminal=' + $sse.terminalStatus + ', cancel=' + $sse.cancelledFinalStatus + ', unauthSse=' + $sse.unauthSseStatus)
 
   # --- page / boot graph / client bundle ---
   $index = Invoke-WebRequest -Uri ($base + '/') -UseBasicParsing -WebSession $webSession -TimeoutSec 15
@@ -154,6 +180,9 @@ try {
     Set-Content -Path (Join-Path $logs 'verify-client-combo.js') -Value $bundle.Content -Encoding UTF8
     Check 'client bundle served' ($bundle.StatusCode -eq 200 -and $bundle.Content -match 'ams/plugin-ui') ('HTTP ' + $bundle.StatusCode + ', ' + $bundle.RawContentLength + ' bytes')
     Check 'client uses SSE + session' (($bundle.Content -match 'EventSource') -and ($bundle.Content -match '/ams/api/session')) 'bundle contains EventSource and session bootstrap'
+    $tabLabels = @('音源炼制', '人声分离', '变声器', '歌曲换源', 'TTS 占位')
+    $tabsFound = @($tabLabels | Where-Object { $bundle.Content -match [regex]::Escape($_) })
+    Check 'client feature tabs' ($tabsFound.Count -eq 5) ('tabs=' + ($tabsFound -join ','))
   } else {
     Check 'client bundle served' $false 'no combo href containing @ams/plugin-ui'
     Check 'client uses SSE + session' $false 'bundle not found'

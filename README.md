@@ -1,9 +1,9 @@
-# ams-plugins（AMS 音乐插件，M1 加固版）
+# ams-plugins（AMS 音乐插件，M1 功能页版）
 
-> 阶段：**M0.6 最小闭环已跑通 → M1 插件加固（鉴权 + SSE）**｜2026-10-19
+> 阶段：M0.6 最小闭环 → M1 加固（鉴权 + SSE）→ **M1 功能页（四功能 + TTS 占位 + 任务操作）**｜2026-10-19
 > 依据：06_方案设计/00_总体设计与约定.md 第 9/10 节、06_方案设计/02_主体/主体详细方案.md、07_执行计划/M0_计划.md
-> 目标：在 DSH fork（ams-harness，dsh-v0.2.1-rc.2）+ 本地 Gateway（ams-services/gateway）上，
-> 提供带鉴权的 Host 工具桥接与 SSE 驱动的 Client 整页，替代 M0.6 的裸路由 + 1s 轮询。
+> 目标：在 DSH fork（ams-harness，dsh-v0.2.1-rc.2）+ 本地 Gateway（ams-services/gateway）上提供
+> **带鉴权的 Host 工具桥接 + SSE 驱动的多页签音乐工作台**，覆盖音源炼制/人声分离/变声器/歌曲换源与 TTS 占位。
 
 ---
 
@@ -11,163 +11,156 @@
 
 | 组件 | 类型 | 内容 |
 |---|---|---|
-| @ams/plugin-core | Host（Cordis 插件） | 3 个模型工具；/ams/api/* 鉴权桥接路由；/ams/api/jobs/{id}/events SSE 透传；Bearer/session 双凭据；常量时间比较 |
-| @ams/plugin-ui | Client（lazy-CJS bundle） | main 整页（状态/工具/任务表/SSE 状态）+ sidebar 入口；启动时申请同源 session cookie；EventSource 订阅任务进度，断线重连 + 降级 2s 轮询 |
-| @ams/music-bundle | DSH bundle | cordis.patch.yml：insert Host/Client 两行 |
+| @ams/plugin-core 0.3.0 | Host（Cordis 插件） | 5 个模型工具；/ams/api/* 双凭据鉴权；SSE 透传；任务取消 |
+| @ams/plugin-ui 0.3.0 | Client（lazy-CJS bundle） | main 整页：5 页签表单 + 任务表（含取消）+ SSE 实时进度 + 鉴权/降级轮询 |
+| @ams/music-bundle 0.3.0 | DSH bundle | cordis.patch.yml：insert Host/Client 两行 |
 | 工具 | music_ping | 插件/Gateway 健康 |
-| 工具 | music_job_submit | 提交 Gateway 任务（ping / mock.long），返回 job id |
-| 工具 | music_job_status | 查询 Gateway 任务 |
-| 验证 | tools/verify-m0.6.ps1 | 一键验证（构建/安装/鉴权/SSE/页面），产出 M1-验证结果.json |
-| 验证 | tools/verify-sse.mjs | 独立 SSE/鉴权检查器（Node，被 ps1 调用） |
+| 工具 | music_job_submit | 提交任务（ping / mock.long / convert.msvc / convert.rvc / separate.pymss / train.rvc；含路径/模型/音色/变调/F0/训练参数或额外 params） |
+| 工具 | music_job_status | 查询单任务状态/进度/阶段/错误 |
+| 工具 | music_job_list | 任务列表（status/type/limit 过滤） |
+| 工具 | music_job_cancel | 取消任务（queued 立即取消；running -> stopping -> cancelled） |
+| 验证 | tools/verify-m0.6.ps1 | 一键验证（构建/安装/鉴权/工具/页签/提交/SSE/取消/页面） |
+| 验证 | tools/verify-sse.mjs | 独立鉴权+SSE+取消检查器 |
 
 数据流：
-浏览器页面 ->（同源 cookie）/ams/api/* -> Host 插件（鉴权 + 常量时间校验）->（Bearer gateway token，不出 Host）127.0.0.1:<port>/api/v1 -> ams-gateway。
+浏览器页面 ->（同源 session cookie）Host 插件 /ams/api/* ->（Bearer gateway token，不出 Host）Gateway /api/v1。
 
 ---
 
-## 2. 安全模型（M1 核心变更）
+## 2. 功能页（Client main 整页，keyed slot ams.home）
 
-| 调用方 | 凭据 | 获取方式 | 适用接口 |
+| 页签 | Gateway 任务类型 | 表单字段 | 说明 |
 |---|---|---|---|
-| 浏览器页面（同源） | 短时 session（HttpOnly Cookie） | GET /ams/api/session（同源 + loopback 校验后签发） | 全部 /ams/api/*（含 SSE） |
-| 本机 CLI / 启动器 / 验证脚本 | Authorization: Bearer <gateway token> | 读 AMS_HOME/runtime/gateway.token | 全部 /ams/api/*（含 SSE） |
-| 其他/跨站 | 无 | — | 401（session 签发跨站为 403） |
+| 音源炼制 | train.rvc | dataset_dir / model / epochs / batch_size / sample_rate | 训练参数按协议透传；Gateway 未注册 train.rvc 时页面显示错误原因 |
+| 人声分离 | separate.pymss | input_path / output_dir | GPU 串行队列 |
+| 变声器 | convert.rvc | input_path / voice / model / index_path / pitch / f0_method / output_dir | RVC 变声 |
+| 歌曲换源 | convert.msvc | input_path / model / voice / output_dir | MSVC 换源 |
+| TTS 占位 | —（不提交） | — | M2 接入（内置默认音色曼波），当前仅占位 |
 
-关键设计：
+页面能力：
 
-1. Gateway token 永不进入浏览器：页面只拿到 Host 签发的一次性 session id（随机 32 字节，base64url）。
-2. session cookie 属性：HttpOnly + SameSite=Strict + Path=/ams/api + Max-Age=1800；token 存在 Host 进程内存 Map（TTL 30 分钟，上限 128，惰性清理），Host 重启即全部失效。
-3. 签发门槛：Host 头必须是 loopback（127.0.0.1 / localhost / [::1]）——防 DNS rebinding；Origin/Referer 必须与 Host 同源；Sec-Fetch-Site 只接受 same-origin/none；否则 403。
-4. 校验：所有 /ams/api/*（除 /session）先尝试 Bearer（对 runtime/gateway.token 做 crypto.timingSafeEqual 常量时间比较），再尝试 session cookie；都失败返回 401 + WWW-Authenticate。长度不等也执行一次等长 dummy 比较，避免长度侧信道提前返回。
-5. SSE 鉴权：EventSource 无法自定义 Header，因此必须走 cookie；SSE 连接建立时同样执行上述校验，且每次重连都重新校验。
-6. 不设 CORS 头：跨站脚本无法读取响应；SameSite=Strict 阻断跨站携带 cookie。
-7. 未覆盖（M2）：Host 进程内 session 不做跨重启持久化；Electron 自定义协议（dsh-app://）下的 Origin 语义需在启动器联调时验证；未做请求限流/审计日志落盘。
+- 页签切换、每页独立表单状态（切页不丢）、提交后自动把它设为 SSE 订阅目标；
+- 任务表展示 id/type/status/progress/stage，非终态任务可「取消」；另有 ping 自检与刷新按钮；
+- SSE 状态徽标（已连接/重连中/降级轮询）、最近事件、Gateway 任务类型（来自 /health 的 job_types）与工具列表；
+- 服务端错误（如 400 UNKNOWN_JOB_TYPE / 502 AMS_GATEWAY_ERROR）原样显示并附提示。
 
 ---
 
-## 3. HTTP 接口（全部挂 ROUTE_PREFIX=/ams/api）
+## 3. 安全模型（沿用 M1 加固，未降级）
+
+| 调用方 | 凭据 | 获取方式 |
+|---|---|---|
+| 浏览器页面（同源） | 短时 session（HttpOnly + SameSite=Strict Cookie，30 分钟） | GET /ams/api/session（loopback + 同源校验后签发） |
+| 本机 CLI / 启动器 / 验证脚本 | Authorization: Bearer <AMS_HOME/runtime/gateway.token> | 常量时间比较（crypto.timingSafeEqual） |
+| 跨站/无凭据 | — | 401；跨站申请 session 403 |
+
+- Gateway token 永不进入浏览器；session 存 Host 进程内存（上限 128，重启失效）；无 CORS 头。
+- SSE 同样需要凭据（EventSource 走 cookie），重连时重新校验。
+
+---
+
+## 4. HTTP 接口（ROUTE_PREFIX=/ams/api）
 
 | 方法 | 路径 | 凭据 | 说明 |
 |---|---|---|---|
-| GET | /session | 无（同源 + loopback 门槛） | 签发 HttpOnly session cookie；返回 {ok,auth,expiresInSec} |
-| GET | /summary | Bearer 或 cookie | 插件/工具/鉴权类型 + Gateway 健康 + 最近 20 任务 + auth 字段 |
-| GET | /health | Bearer 或 cookie | Gateway /health 透传 |
-| GET | /jobs | Bearer 或 cookie | Gateway /jobs 透传（limit=50） |
-| POST | /jobs | Bearer 或 cookie | 创建任务 {type, params?}（201） |
-| GET | /jobs/{id} | Bearer 或 cookie | 单任务详情 |
-| GET | /jobs/{id}/events | Bearer 或 cookie | SSE 透传 Gateway 事件（status/progress/log/artifact），带 keepalive 心跳与 Last-Event-ID 透传 |
-
-错误统一 {ok:false, error:{code, message}}；401 带 WWW-Authenticate: Bearer realm="ams"。
+| GET | /session | 无（同源+loopback 门槛） | 签发 HttpOnly session cookie |
+| GET | /summary | Bearer/cookie | 插件/工具/auth/鉴权类型 + Gateway 健康 + jobTypes + 最近 20 任务 |
+| GET | /health | Bearer/cookie | Gateway /health 透传 |
+| GET | /jobs | Bearer/cookie | 任务列表（limit=50） |
+| POST | /jobs | Bearer/cookie | 创建任务 {type, params?} |
+| GET | /jobs/{id} | Bearer/cookie | 单任务详情 |
+| POST | /jobs/{id}/cancel | Bearer/cookie | 取消任务 |
+| GET | /jobs/{id}/events | Bearer/cookie | SSE 透传（status/progress/log/artifact，15s keepalive，透传 Last-Event-ID） |
 
 ---
 
-## 4. 目录结构
+## 5. 目录结构
 
 ~~~text
 ams-plugins/
 ├─ package.json / pnpm-workspace.yaml / .npmrc
 ├─ tools/
-│  ├─ build.mjs              # src -> lib + 校验 lazy-CJS + pnpm pack 到 dist/
-│  ├─ verify-m0.6.ps1        # 一键验证（pwsh 7）：构建/安装/鉴权/SSE/页面
-│  └─ verify-sse.mjs         # SSE + 鉴权独立检查器
-├─ dist/                     # tarball（0.2.0 可装）
+│  ├─ build.mjs              # src -> lib + lazy-CJS 形状校验 + pnpm pack 到 dist/
+│  ├─ verify-m0.6.ps1        # 一键验证（pwsh 7）
+│  └─ verify-sse.mjs         # 鉴权/SSE/取消独立检查器
+├─ dist/                     # 0.3.0 tarball
 └─ packages/
-   ├─ plugin-core/           # src/index.js -> lib/index.js（Host）
-   ├─ plugin-ui/             # src/client.js -> lib/client.js（Client，lazy-CJS）
+   ├─ plugin-core/           # Host（src/index.js -> lib/index.js）
+   ├─ plugin-ui/             # Client（src/client.js -> lib/client.js，lazy-CJS）
    └─ music-bundle/          # cordis.patch.yml（insert 两行）
 ~~~
 
 ---
 
-## 5. 构建
+## 6. 构建与安装
 
 ~~~powershell
 # Node 24.20 在 WinGet 用户目录；pnpm 11.28.5 随 Node 附带
 $env:PATH = 'C:/Users/<user>/AppData/Local/Microsoft/WinGet/Packages/OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe/node-v24.20.0-win-x64;' + $env:PATH
 Set-Location F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-plugins
-
 pnpm install --ignore-scripts   # 无第三方依赖，可选
 pnpm run pack                   # = node tools/build.mjs --pack
-~~~
 
-产物：dist/ams-plugin-core-0.2.0.tgz、ams-plugin-ui-0.2.0.tgz、ams-music-bundle-0.2.0.tgz。
-纯 JS（Host ESM + 手写 lazy-CJS），无 TS/tsdown 构建链，可离线构建；pnpm store/cache 指向仓库内或 07_执行计划/_dsh_plugin_home，不写用户目录。
-
----
-
-## 6. 安装到隔离 DSH_HOME
-
-~~~powershell
 $env:DSH_HOME = 'F:/Deepseek_harness/AI音乐处理/07_执行计划/_dsh_plugin_home/DSH_HOME'
 $env:AMS_HOME = 'F:/Deepseek_harness/AI音乐处理/07_执行计划/_dsh_plugin_home/AMS'
 $cli = 'F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-harness/apps/cli/lib/bin.js'
-
 node $cli --profile music --from-default-profile web --dump-default-config
-node $cli plugin --profile music add (Get-ChildItem 'F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-plugins/dist/*0.2.0.tgz').FullName
+node $cli plugin --profile music add (Get-ChildItem 'F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-plugins/dist/*0.3.0.tgz').FullName
 node $cli --profile music --no-open --port 39218
 ~~~
 
-profile 的 pnpm storeDir/cacheDir 已被验证脚本写入 profile 的 pnpm-workspace.yaml，避免写到盘根。
+产物：dist/ams-plugin-core-0.3.0.tgz、ams-plugin-ui-0.3.0.tgz、ams-music-bundle-0.3.0.tgz。
+纯 JS（Host ESM + 手写 lazy-CJS），无 TS/tsdown 构建链，可离线构建；pnpm store/cache 指向仓库内或 _dsh_plugin_home，不写用户目录。
 
 ---
 
-## 7. 验证（M1，实测 17/17 PASS）
+## 7. 验证（实测 21/21 PASS，2026-10-19T23:18:23+08:00）
 
 ~~~powershell
 Set-Location F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-plugins
-# 必须 pwsh 7（脚本 UTF-8 无 BOM 且默认参数含中文路径）；WinPS 5.1 会乱码
+# 必须 pwsh 7（UTF-8 无 BOM + 中文默认路径；WinPS 5.1 会乱码）
 pwsh -NoProfile -ExecutionPolicy Bypass -File tools/verify-m0.6.ps1
 ~~~
 
-覆盖项与实测结果（2026-10-19T22:37:42+08:00，profile=music，隔离 DSH_HOME）：
-
 | 检查项 | 结果 |
 |---|---|
-| 构建/打包 3 个 0.2.0 tarball | PASS |
-| Gateway ports.json + token | PASS（动态端口 12084） |
-| profile 初始化 / 插件安装 / dump-config 含两行 | PASS |
-| Web 启动 + token URL + 首页 200 | PASS |
-| 无凭据访问 /ams/api/summary | PASS：HTTP 401 |
-| 跨站申请 session | PASS：HTTP 403 |
-| 同源申请 session | PASS：HTTP 200 + 1 cookie（HttpOnly、SameSite=Strict） |
-| 带 cookie 访问 summary | PASS：HTTP 200，auth=session，tools=3 |
-| 带 Bearer 访问 summary | PASS：HTTP 200，auth=bearer |
-| SSE 鉴权拒绝 | PASS：无凭据 events 接口 401 |
-| SSE 透传事件 | PASS：11 个事件（status/log/progress/artifact），terminal=succeeded |
-| 页面仍可加载（boot graph 含 @ams/plugin-ui） | PASS |
-| Client bundle（1,936,961 B）含 EventSource + session bootstrap | PASS |
-| 首页 200 | PASS |
+| 构建/打包 0.3.0 tarball、Gateway 端口/token、profile 安装/dump-config、Web 启动 | PASS |
+| 无凭据 summary / 跨站 session / 同源 session cookie / cookie 与 Bearer 访问 | PASS（401 / 403 / 200+HttpOnly+SameSite / 200） |
+| 工具注册 5 个 | PASS：music_ping,music_job_submit,music_job_status,music_job_list,music_job_cancel |
+| Gateway 任务类型透出 | PASS：convert.msvc,convert.rvc,mock.long,ping,separate.pymss |
+| convert.rvc 提交链路 | PASS：HTTP 201（Gateway 已注册 Runner；未注册时 502 AMS_GATEWAY_ERROR 透传） |
+| SSE 事件 + 取消流 | PASS：11 事件 terminal=succeeded；mock.long 取消后 cancelled；无凭据 SSE=401 |
+| 页签 | PASS：音源炼制/人声分离/变声器/歌曲换源/TTS 占位全部进入下发 bundle |
+| 页面可加载（boot graph + bundle） | PASS：含 @ams/plugin-ui，bundle 1,947,507 B 含 EventSource/session |
 
-结构化证据：07_执行计划/_dsh_plugin_home/M1-验证结果.json；日志：07_执行计划/_dsh_plugin_home/logs/（verify-*、m1-*）。
+结构化证据：07_执行计划/_dsh_plugin_home/M1-验证结果.json；日志：logs/verify-*。
 
 ---
 
 ## 8. Client 行为（plugin-ui）
 
-1. 页面挂载 -> GET /ams/api/session（同源）-> 再拉 /ams/api/summary；
-2. summary 返回后选一个 active job（running/queued/stopping）作为 watched，创建 EventSource('/ams/api/jobs/{id}/events', {withCredentials:true})；
-3. 事件处理：progress/status -> 就地更新任务行（progress/stage/status）；artifact/log 更新最近事件展示；status 进入终态则关闭 ES 并刷新列表；
-4. 断线：onerror 关闭并指数退避重连（400ms*2^n，上限 8s，最多 3 次）；仍失败 -> fallback 模式每 2s 轮询 summary，每 15s 尝试重连 SSE；
-5. 401：fetchJson 自动重新申请 session 后重试一次；
-6. 页面显示：Host 插件版本、页面鉴权类型、SSE 状态（已连接/重连中/降级轮询）、最近事件、Gateway 健康、工具列表、任务表、创建 ping 按钮。
+1. 挂载后 GET /ams/api/session -> GET /ams/api/summary；401 自动重申请 session 后重试；
+2. 选 active job（running/queued/stopping）作为 watched；EventSource('/ams/api/jobs/{id}/events', {withCredentials:true})；
+3. progress/status 事件就地更新任务行；artifact/log 更新最近事件；终态关闭 SSE 并刷新；
+4. 提交表单 -> POST /ams/api/jobs（参数按类型透传）；成功后把新 job 设为 watched；错误信息原样展示；
+5. 取消按钮 -> POST /ams/api/jobs/{id}/cancel；SSE 随后推送 stopping/cancelled；
+6. 断线：指数退避重连（≤3 次）-> 降级 2s 轮询 + 每 15s 试重连；页面显示 SSE 状态。
 
 ---
 
-## 9. 限制（M1 已知，不阻塞下一阶段）
+## 9. 已知限制（M1）
 
-1. Host 进程内存 session：Host 重启即失效（页面会自动重申请）；不做跨进程/跨启动器持久化。
-2. 仅同源 Web 验证：Electron 自定义协议（dsh-app://）下 Origin/Sec-Fetch-Site 行为未验证，启动器联调时需单独处理（必要时允许 dsh-app:// 源或改走 DSH Remote）。
-3. SSE 未做逐事件背压/限流；长任务大量 log 事件由 Gateway 侧保留策略约束。
-4. 浏览器只做 boot graph + bundle + 接口闭环验证，未引入 headless 浏览器做 DOM 断言。
-5. 未接 DSH Remote/Typert（M2），/ams/api 仍是裸 HTTP；未做插件签名/哈希。
-6. mock.long 的 SSE 未在本轮脚本验证（Gateway 测试覆盖；脚本只跑 ping）。
+1. Gateway Runner 覆盖率取决于 Gateway 版本：本轮实测 Gateway 暴露 convert.msvc/convert.rvc/separate.pymss/mock.long/ping，train.rvc 未注册（音源炼制提交会返回错误并显示原因）。
+2. Host session 存进程内存，重启失效；未做撤销 UI/审计落盘；Electron dsh-app:// 源未验证。
+3. 页面用内联样式，未接 DSH 主题 token/组件库；无 HMR；未做 DOM 级断言（用 boot graph + bundle + 接口闭环验证）。
+4. SSE 无逐事件背压；长任务大量 log 由 Gateway 保留策略约束。
+5. 未接 DSH Remote/Typert；/ams/api 仍是裸 HTTP；未做插件签名/哈希。
 
 ---
 
-## 10. 下一步（M2 建议）
+## 10. 下一步（M2）
 
-1. 用 DSH ctx.remote（Typert codegen）替代裸 /ams/api，把鉴权收敛到 DSH 连接层；
-2. 启动器（Tauri/Electron 壳）联调同源策略，补 dsh-app:// 场景；
-3. Host session 改为可撤销（登出/过期清理 UI）+ 审计日志落盘；
-4. TS 化 + 官方 clientBundle 构建 preset；
-5. 任务页接 Gateway artifacts 列表/下载；mock.long 进度/取消联调。
+1. DSH ctx.remote（Typert）替换裸 HTTP，鉴权收敛到连接层；
+2. 业务 Runner 全部接入后补 train.rvc 页面联调与 artifacts 下载；
+3. 启动器（Tauri/Electron）联调同源策略，补 dsh-app:// 场景；
+4. TS 化 + 官方 clientBundle preset；session 撤销/审计。

@@ -20,9 +20,9 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 export const name = 'ams-plugin-core'
 export const inject = ['tools', 'webServer']
 
-const PLUGIN_VERSION = '0.2.0'
+const PLUGIN_VERSION = '0.3.0'
 const ROUTE_PREFIX = '/ams/api'
-const TOOL_NAMES = ['music_ping', 'music_job_submit', 'music_job_status']
+const TOOL_NAMES = ['music_ping', 'music_job_submit', 'music_job_status', 'music_job_list', 'music_job_cancel']
 const SESSION_COOKIE = 'ams_bridge'
 const SESSION_TTL_MS = 30 * 60 * 1000
 const SESSION_MAX = 128
@@ -63,7 +63,10 @@ async function gatewayRequest(path, options) {
   let body = null
   if (text !== '') { try { body = JSON.parse(text) } catch { body = { raw: text } } }
   if (!response.ok) {
-    const error = new Error('Gateway HTTP ' + String(response.status) + ' ' + path)
+    const detail = body && body.error
+      ? ' ' + String(body.error.code || '') + ': ' + String(body.error.message || '')
+      : ''
+    const error = new Error('Gateway HTTP ' + String(response.status) + ' ' + path + detail)
     error.status = response.status
     error.body = body
     throw error
@@ -74,6 +77,10 @@ async function gatewayRequest(path, options) {
 function gatewayHealth() { return gatewayRequest('/health') }
 function gatewayJobs(limit) { return gatewayRequest('/jobs?limit=' + String(limit)) }
 function gatewayJob(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId)) }
+function gatewayCancel(jobId) {
+  return gatewayRequest('/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' })
+}
+
 function gatewaySubmit(type, params) {
   return gatewayRequest('/jobs', {
     method: 'POST',
@@ -275,6 +282,7 @@ async function summaryPayload(auth) {
   try {
     const health = await gatewayHealth()
     result.gateway = { ok: true, base: info.base, status: String(health.status || 'ok'), version: health.version || null, job_types: health.job_types || null }
+    result.jobTypes = Array.isArray(health.job_types) ? health.job_types : []
   } catch (error) {
     result.gateway.error = String(error && error.message ? error.message : error)
   }
@@ -331,11 +339,22 @@ export function apply(ctx) {
 
   const submitTool = defineTool({
     name: 'music_job_submit',
-    description: 'Submit an AMS Gateway job. type=ping runs a fast mock job; type=mock.long runs a cancellable long mock job. Returns the Gateway job id; poll with music_job_status or watch /ams/api/jobs/{id}/events.',
+    description: 'Submit an AMS Gateway job. Supported types: ping, mock.long, convert.msvc (song re-voicing), convert.rvc (voice conversion), separate.pymss (vocal separation), train.rvc (voice model training). For convert/separate/train pass the backend params (input_path, output_dir, model, voice, pitch, f0_method, index_path, dataset_dir, epochs, ...) or an extra params object. Returns the Gateway job id; the Gateway decides which types are currently available.',
     parameters: {
-      type: { type: 'string', required: true, enum: ['ping', 'mock.long'], description: 'Gateway job type.' },
+      type: { type: 'string', required: true, enum: ['ping', 'mock.long', 'convert.msvc', 'convert.rvc', 'separate.pymss', 'train.rvc'], description: 'Gateway job type.' },
+      input_path: { type: 'string', description: 'Input audio / dataset path for convert and separate jobs.' },
+      output_dir: { type: 'string', description: 'Output directory hint for the backend.' },
+      model: { type: 'string', description: 'Model id/name or .pth path (convert.msvc / convert.rvc).' },
+      voice: { type: 'string', description: 'Target voice name (convert.rvc / convert.msvc).' },
+      index_path: { type: 'string', description: 'Optional .index path for RVC voice conversion.' },
+      dataset_dir: { type: 'string', description: 'Training dataset directory (train.rvc).' },
+      pitch: { type: 'integer', description: 'Pitch shift in semitones (-24..24).' },
+      f0_method: { type: 'string', enum: ['rmvpe', 'harvest', 'pm', 'crepe'], description: 'F0 extraction method for voice conversion.' },
+      epochs: { type: 'integer', description: 'Training epochs (train.rvc).' },
+      batch_size: { type: 'integer', description: 'Training batch size (train.rvc).' },
+      sample_rate: { type: 'integer', description: 'Target sample rate, e.g. 40000 / 48000.' },
       seconds: { type: 'number', description: 'mock.long duration in seconds (0.2-300).' },
-      project_id: { type: 'string', description: 'Optional AMS project id.' }
+      params: { type: 'json', description: 'Extra Gateway params merged into the request (advanced).' }
     },
     output: {
       schema: {
@@ -352,7 +371,11 @@ export function apply(ctx) {
     },
     async execute(args) {
       const params = {}
-      if (typeof args.seconds === 'number') params.seconds = args.seconds
+      const copyKeys = ['input_path', 'output_dir', 'model', 'voice', 'index_path', 'dataset_dir', 'pitch', 'f0_method', 'epochs', 'batch_size', 'sample_rate', 'seconds']
+      for (const key of copyKeys) { if (args[key] !== undefined && args[key] !== null) params[key] = args[key] }
+      if (args.params !== undefined && args.params !== null && typeof args.params === 'object') {
+        for (const key of Object.keys(args.params)) params[key] = args.params[key]
+      }
       const job = await gatewaySubmit(args.type, params)
       const jobId = String(job && job.id ? job.id : '')
       if (jobId === '') throw new Error('Gateway response did not include a job id')
@@ -360,8 +383,7 @@ export function apply(ctx) {
         job_id: jobId,
         type: String(job.type || args.type),
         status: String(job.status || 'queued'),
-        ...(typeof job.created_at === 'string' ? { created_at: job.created_at } : {}),
-        ...(typeof args.project_id === 'string' ? { project_id: args.project_id } : {})
+        ...(typeof job.created_at === 'string' ? { created_at: job.created_at } : {})
       }
     }
   })
@@ -400,9 +422,71 @@ export function apply(ctx) {
     }
   })
 
+  const listTool = defineTool({
+    name: 'music_job_list',
+    description: 'List recent AMS Gateway jobs, optionally filtered by status or type. Returns job summaries (id/type/status/progress/stage) newest first.',
+    parameters: {
+      status: { type: 'string', enum: ['queued', 'running', 'stopping', 'succeeded', 'failed', 'cancelled'], description: 'Optional status filter.' },
+      type: { type: 'string', description: 'Optional job type filter, e.g. convert.rvc.' },
+      limit: { type: 'integer', description: 'Max jobs to return (1-50, default 20).' }
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          jobs: { type: 'array', required: true, items: { type: 'json' } },
+          total: { type: 'integer' }
+        }
+      },
+      render: (_args, value) => textResult('Gateway jobs: ' + String(value.jobs.length) + ' returned, ' + String(value.total) + ' total')
+    },
+    async execute(args) {
+      const search = []
+      if (typeof args.status === 'string') search.push('status=' + encodeURIComponent(args.status))
+      if (typeof args.type === 'string') search.push('type=' + encodeURIComponent(args.type))
+      const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(50, Math.floor(args.limit))) : 20
+      search.push('limit=' + String(limit))
+      const list = await gatewayRequest('/jobs?' + search.join('&'))
+      const jobs = Array.isArray(list.data) ? list.data : (Array.isArray(list) ? list : [])
+      const total = typeof list.total === 'number' ? list.total : jobs.length
+      return { jobs, total }
+    }
+  })
+
+  const cancelTool = defineTool({
+    name: 'music_job_cancel',
+    description: 'Cancel one AMS Gateway job by id. A queued job is cancelled immediately; a running job goes stopping -> cancelled (the Gateway kills its process tree).',
+    parameters: {
+      job_id: { type: 'string', required: true, description: 'Gateway job id.' }
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string', required: true },
+          status: { type: 'string', required: true },
+          error: { type: 'string' }
+        }
+      },
+      render: (_args, value) => textResult('Cancel requested for ' + value.id + ', current status=' + value.status)
+    },
+    async execute(args) {
+      const job = await gatewayCancel(args.job_id)
+      return {
+        id: String(job.id),
+        status: String(job.status),
+        ...(job.error ? { error: String(job.error) } : {})
+      }
+    }
+  })
+
   ctx.effect(() => ctx.tools.register(pingTool), 'ams-plugin-core: music_ping')
   ctx.effect(() => ctx.tools.register(submitTool), 'ams-plugin-core: music_job_submit')
   ctx.effect(() => ctx.tools.register(statusTool), 'ams-plugin-core: music_job_status')
+  ctx.effect(() => ctx.tools.register(listTool), 'ams-plugin-core: music_job_list')
+  ctx.effect(() => ctx.tools.register(cancelTool), 'ams-plugin-core: music_job_cancel')
   log('registered tools: ' + TOOL_NAMES.join(', '))
 
   ctx.effect(() => ctx.webServer.register({
@@ -449,6 +533,10 @@ export function apply(ctx) {
           await pipeEvents(req, res, rest[1])
           return
         }
+        if (rest.length === 3 && rest[0] === 'jobs' && rest[2] === 'cancel' && req.method === 'POST') {
+          sendJson(res, 200, await gatewayCancel(rest[1]))
+          return
+        }
         if (rest.length === 2 && rest[0] === 'jobs' && req.method === 'GET') {
           sendJson(res, 200, await gatewayJob(rest[1]))
           return
@@ -460,5 +548,5 @@ export function apply(ctx) {
       }
     }
   }), 'ams-plugin-core: authenticated ' + ROUTE_PREFIX)
-  log('registered authenticated routes: ' + ROUTE_PREFIX + '/session|summary|health|jobs|jobs/{id}|jobs/{id}/events')
+  log('registered authenticated routes: ' + ROUTE_PREFIX + '/session|summary|health|jobs|jobs/{id}|jobs/{id}/cancel|jobs/{id}/events')
 }

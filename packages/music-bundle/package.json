@@ -1,6 +1,6 @@
 {
   "name": "@ams/music-bundle",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "AMS music profile bundle: inserts @ams/plugin-core (Host) and @ams/plugin-ui (Client) rows",
   "license": "MIT",
@@ -22,6 +22,7 @@
       "@ams/plugin-core",
       "@ams/plugin-ui"
     ],
-    "hardened": "M1: bearer/session auth + SSE"
+    "hardened": "M1: bearer/session auth + SSE",
+    "features": "M1 pages: train/separate/convert/remix/TTS placeholder + job list/cancel"
   }
 }
