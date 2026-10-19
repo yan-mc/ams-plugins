@@ -2,7 +2,7 @@ packages:
   - 'packages/*'
 
 # 所有 pnpm 状态留在本仓库内，避免写用户目录/盘根（stateDir 仅支持机器级配置，不在此设置）
-storeDir: F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-plugins/.pnpm-store
-cacheDir: F:/Deepseek_harness/AI音乐处理/08_项目代码/ams-plugins/.pnpm-cache
+storeDir: .pnpm-store
+cacheDir: .pnpm-cache
 autoInstallPeers: false
 strictPeerDependencies: false
