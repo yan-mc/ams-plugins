@@ -370,6 +370,37 @@ window.__ModuleLoader__.load({
       const [busyTab, setBusyTab] = React.useState(null)
       const [messages, setMessages] = React.useState({})
       const [cancelBusy, setCancelBusy] = React.useState(null)
+      const [connection, setConnection] = React.useState(null)
+      const [connBase, setConnBase] = React.useState('')
+      const [connKey, setConnKey] = React.useState('')
+      const [connBusy, setConnBusy] = React.useState(false)
+      const [connMessage, setConnMessage] = React.useState('')
+
+      const refreshConnection = React.useCallback(async () => {
+        try {
+          const value = await fetchJson('/ams/api/connection')
+          setConnection(value)
+          if (!connBase && value && value.base_url) setConnBase(value.base_url)
+        } catch (error) { setConnMessage('读取连接配置失败：' + String(error && error.message ? error.message : error)) }
+      }, [connBase])
+
+      React.useEffect(() => { void refreshConnection() }, [])
+
+      const saveConnection = async () => {
+        setConnBusy(true)
+        setConnMessage('')
+        try {
+          const value = await fetchJson('/ams/api/connection', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ base_url: connBase, api_key: connKey })
+          })
+          setConnection(value)
+          setConnKey('')
+          setConnMessage('已保存；重启 AMS Kernel 后生效。')
+        } catch (error) { setConnMessage('保存失败：' + String(error && error.message ? error.message : error)) }
+        finally { setConnBusy(false) }
+      }
 
       const summary = consoleState.summary
       const gateway = summary && summary.gateway ? summary.gateway : null
@@ -425,6 +456,18 @@ window.__ModuleLoader__.load({
           consoleState.updatedAt ? ' · 最近刷新 ' + consoleState.updatedAt : ''),
 
         consoleState.error ? h('div', { style: cardStyle({ borderColor: COLORS.err, color: COLORS.err }) }, '请求失败：' + consoleState.error) : null,
+
+        h('div', { style: cardStyle() },
+          h('h2', { style: { margin: '0 0 10px', fontSize: 16 } }, '连接设置'),
+          h('p', { style: { color: COLORS.muted, fontSize: 12, marginTop: 0 } }, '只保存网址和 Key；不创建环境变量，配置在 AMS 安装目录内。保存后重启 AMS Kernel 生效。'),
+          h('label', { style: { display: 'block', marginBottom: 8, fontSize: 13 } }, '网址',
+            h('input', { value: connBase, onChange: e => setConnBase(e.target.value), placeholder: 'https://api.deepseek.com/anthropic', style: { display: 'block', width: '100%', marginTop: 4, padding: '7px 8px', background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 6 } })),
+          h('label', { style: { display: 'block', marginBottom: 8, fontSize: 13 } }, 'Key',
+            h('input', { value: connKey, onChange: e => setConnKey(e.target.value), type: 'password', placeholder: connection && connection.has_api_key ? '已保存（留空表示不修改）' : '输入 API Key', style: { display: 'block', width: '100%', marginTop: 4, padding: '7px 8px', background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 6 } })),
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+            h('button', { disabled: connBusy, onClick: () => { void saveConnection() }, style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: connBusy ? 'wait' : 'pointer' } }, connBusy ? '保存中…' : '保存连接'),
+            h('span', { style: { color: COLORS.muted, fontSize: 12 } }, connection ? (connection.configured ? '已配置' : '未配置') : '读取中…')),
+          connMessage ? h('div', { style: { color: connMessage.indexOf('失败') >= 0 ? COLORS.err : COLORS.ok, fontSize: 12, marginTop: 8 } }, connMessage) : null),
 
         h('div', { style: cardStyle() },
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 } },

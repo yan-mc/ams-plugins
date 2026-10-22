@@ -11,7 +11,7 @@
  *
  * The Gateway token never leaves this Host process.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -39,6 +39,47 @@ function resolveAmsHome() {
     return dirname(dirname(normalized))
   }
   return dirname(dirname(process.execPath))
+}
+
+function connectionPath() {
+  return join(resolveAmsHome(), 'config', 'connection.json')
+}
+
+function yamlQuote(value) {
+  return "'" + String(value).replace(/'/g, "''") + "'"
+}
+
+function readConnection() {
+  try { return JSON.parse(readFileSync(connectionPath(), 'utf8')) } catch { return null }
+}
+
+function applyConnection(baseUrl, apiKey) {
+  if (typeof baseUrl !== 'string' || baseUrl.trim() === '') throw new Error('网址不能为空')
+  if (typeof apiKey !== 'string' || apiKey.trim() === '') throw new Error('Key 不能为空')
+  const dataRoot = resolveAmsHome()
+  const dshHome = join(dataRoot, 'kernel', 'dsh')
+  const profile = join(dshHome, 'profiles', 'desktop')
+  mkdirSync(join(dataRoot, 'config'), { recursive: true })
+  mkdirSync(profile, { recursive: true })
+  const config = { base_url: baseUrl.trim(), api_key: apiKey.trim() }
+  writeFileSync(connectionPath(), JSON.stringify(config, null, 2), 'utf8')
+  writeFileSync(join(dshHome, '.credentials.yaml'), 'version: 1\nrefs:\n  AMS_API_KEY: ' + yamlQuote(config.api_key) + '\n', 'utf8')
+  const patchPath = join(profile, 'cordis.patch.yml')
+  let patch = ''
+  try { patch = readFileSync(patchPath, 'utf8') } catch { /* new profile */ }
+  const block = "- id: llm-deepseek-ams\n  name: '@deepseek-ai/dsh-llm-deepseek-api-key'\n  config:\n    baseURL: " + yamlQuote(config.base_url) + '\n    apiKeyEnv: AMS_API_KEY\n'
+  if (patch.indexOf('id: llm-deepseek-ams') >= 0) {
+    const start = patch.indexOf('- id: llm-deepseek-ams')
+    const tail = patch.slice(start + 1)
+    const next = tail.indexOf('\n- ')
+    const end = next >= 0 ? start + 1 + next : patch.length
+    patch = patch.slice(0, start) + block.trimEnd() + patch.slice(end)
+  } else {
+    if (patch !== '' && !patch.endsWith('\n')) patch += '\n'
+    patch += block
+  }
+  writeFileSync(patchPath, patch, 'utf8')
+  return config
 }
 
 /** Read the Gateway endpoint and Bearer token from AMS_HOME/runtime. */
@@ -521,6 +562,21 @@ export function apply(ctx) {
         if (auth === 'none') { sendUnauthorized(res, requestPath); return }
 
         const joined = rest.join('/')
+        if (joined === 'connection' && req.method === 'GET') {
+          const config = readConnection()
+          sendJson(res, 200, { ok: true, base_url: config ? String(config.base_url || '') : '', has_api_key: Boolean(config && config.api_key), configured: Boolean(config && config.base_url && config.api_key) })
+          return
+        }
+        if (joined === 'connection' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const config = applyConnection(body && body.base_url, body && body.api_key)
+            sendJson(res, 200, { ok: true, base_url: config.base_url, has_api_key: true, configured: true, message: '已保存；重启 AMS Kernel 后生效' })
+          } catch (error) {
+            sendJson(res, 400, { ok: false, error: { code: 'AMS_CONNECTION_INVALID', message: String(error && error.message ? error.message : error) } })
+          }
+          return
+        }
         if (joined === 'summary' && req.method === 'GET') { sendJson(res, 200, await summaryPayload(auth)); return }
         if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
         if (joined === 'jobs' && req.method === 'GET') { sendJson(res, 200, await gatewayJobs(50)); return }
