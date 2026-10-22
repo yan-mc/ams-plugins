@@ -12,8 +12,7 @@
  * The Gateway token never leaves this Host process.
  */
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -32,11 +31,14 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
 /** In-memory browser sessions: token -> { createdAt, expiresAt, lastSeen }. */
 const sessions = new Map()
 
-/** Resolve AMS_HOME from the environment; fall back to the product default. */
+/** Resolve the AMS data root from the kernel's own DSH_HOME or executable path. */
 function resolveAmsHome() {
-  const fromEnv = process.env.AMS_HOME
-  if (typeof fromEnv === 'string' && fromEnv.trim() !== '') return fromEnv.trim()
-  return join(homedir(), 'AppData', 'Local', 'AMS')
+  const dshHome = process.env.DSH_HOME
+  if (typeof dshHome === 'string' && dshHome.trim() !== '') {
+    const normalized = dshHome.trim()
+    return dirname(dirname(normalized))
+  }
+  return dirname(dirname(process.execPath))
 }
 
 /** Read the Gateway endpoint and Bearer token from AMS_HOME/runtime. */
