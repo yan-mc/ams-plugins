@@ -55,7 +55,8 @@ window.__ModuleLoader__.load({
         submitLabel: '开始分离',
         fields: [
           { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/song.wav', importable: true },
-          { key: 'output_dir', label: '输出目录', placeholder: 'F:/AMS/output/separate' }
+          { key: 'model', label: '分离模型', kind: 'select', options: ['scnet_checkpoint_musdb18', 'bs_roformer_voc_hyperacev2'] },
+          { key: 'device', label: '设备', kind: 'select', options: ['auto', 'cuda:0', 'cpu'], initial: 'auto' }
         ]
       },
       {
@@ -64,12 +65,10 @@ window.__ModuleLoader__.load({
         submitLabel: '开始变声',
         fields: [
           { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/voice.wav', importable: true },
-          { key: 'voice', label: '目标音色', placeholder: '曼波' },
-          { key: 'model', label: '模型（.pth/名称）', placeholder: '曼波.pth' },
-          { key: 'index_path', label: '索引（可选 .index）', placeholder: '曼波.index', importable: true },
-          { key: 'pitch', label: '变调（半音）', kind: 'number', initial: '0' },
-          { key: 'f0_method', label: 'F0 方法', kind: 'select', options: ['rmvpe', 'harvest', 'pm', 'crepe'], initial: 'rmvpe' },
-          { key: 'output_dir', label: '输出目录', placeholder: 'F:/AMS/output/convert' }
+          { key: 'voice_name', label: '目标音色', kind: 'select', optionsKey: 'voices', placeholder: '曼波' },
+          { key: 'f0_up_key', label: '变调（半音）', kind: 'number', initial: '0' },
+          { key: 'index_rate', label: '索引混合率（0-1）', kind: 'number', initial: '0.75' },
+          { key: 'device', label: '设备', kind: 'select', options: ['cuda:0', 'cuda', 'cpu'], initial: 'cuda:0' }
         ]
       },
       {
@@ -77,10 +76,10 @@ window.__ModuleLoader__.load({
         note: 'MSVC 歌曲换源：用已炼制模型替换歌曲音色。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
         submitLabel: '开始换源',
         fields: [
-          { key: 'input_path', label: '输入歌曲', placeholder: 'F:/AMS/input/song.wav', importable: true },
-          { key: 'model', label: '模型（.pth/名称）', placeholder: '我的音色.pth' },
-          { key: 'voice', label: '目标音色（可选）', placeholder: '曼波' },
-          { key: 'output_dir', label: '输出目录', placeholder: 'F:/AMS/output/remix' }
+          { key: 'input_path', label: '输入 .msvc 文件', placeholder: 'F:/AMS/input/model.msvc', importable: true },
+          { key: 'name', label: '模型名（可选）', placeholder: '我的音色' },
+          { key: 'reference_pth', label: '参考 .pth（可选）', placeholder: 'F:/AMS/input/reference.pth', importable: true },
+          { key: 'out_dir', label: '输出目录（data 内）', placeholder: '留空自动 data/artifacts' }
         ]
       },
       {
@@ -89,7 +88,7 @@ window.__ModuleLoader__.load({
         submitLabel: '开始合成',
         fields: [
           { key: 'text', label: '要合成的文本', kind: 'textarea', placeholder: '输入文本（最多 2000 字）' },
-          { key: 'model', label: '模型（可选 .onnx）', placeholder: '留空使用 data/runtime/tts 默认模型' }
+          { key: 'model', label: 'TTS 模型', kind: 'select', optionsKey: 'ttsModels', placeholder: '留空使用默认模型' }
         ]
       }
     ]
@@ -327,7 +326,7 @@ window.__ModuleLoader__.load({
       const onImport = props.onImport
       const common = { style: fieldInputStyle(), value: value, onChange: event => onChange(field.key, event.target.value) }
       const control = field.kind === 'select'
-        ? h('select', common, field.options.map(option => h('option', { key: option, value: option }, option)))
+        ? h('select', common, (field.options || []).map(option => typeof option === 'string' ? h('option', { key: option, value: option }, option) : h('option', { key: option.value, value: option.value }, option.label)))
         : field.kind === 'textarea'
           ? h('textarea', Object.assign({ rows: 5, placeholder: field.placeholder || '' }, common))
           : h('input', Object.assign({ type: field.kind === 'number' ? 'number' : 'text', placeholder: field.placeholder || '' }, common))
@@ -348,12 +347,14 @@ window.__ModuleLoader__.load({
       const onChange = props.onChange
       const onSubmit = props.onSubmit
       const onImport = props.onImport
+      const dynamicOptions = props.dynamicOptions || {}
+      const fields = tab.fields.map(field => field.optionsKey ? Object.assign({}, field, { options: dynamicOptions[field.optionsKey] || [] }) : field)
       const registered = new Set((summary && Array.isArray(summary.jobTypes) ? summary.jobTypes : []).map(item => item.type))
       const available = tab.jobType !== null && registered.has(tab.jobType)
       return h('div', null,
         tab.note ? h('div', { style: { color: available ? COLORS.muted : COLORS.warn, fontSize: 12, marginBottom: 12, lineHeight: 1.6 } }, tab.note) : null,
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0 16px' } },
-          tab.fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport }))),
+          fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport }))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 } },
           h('button', {
             style: {
@@ -380,6 +381,8 @@ window.__ModuleLoader__.load({
       })
       const [busyTab, setBusyTab] = React.useState(null)
       const [messages, setMessages] = React.useState({})
+      const [voices, setVoices] = React.useState([])
+      const [ttsModels, setTtsModels] = React.useState([])
       const [cancelBusy, setCancelBusy] = React.useState(null)
       const [connection, setConnection] = React.useState(null)
       const [connBase, setConnBase] = React.useState('')
@@ -396,6 +399,21 @@ window.__ModuleLoader__.load({
       }, [connBase])
 
       React.useEffect(() => { void refreshConnection() }, [])
+
+      React.useEffect(() => {
+        void (async () => {
+          try {
+            const value = await fetchJson('/ams/api/voices')
+            const list = value && value.data && Array.isArray(value.data.voices) ? value.data.voices : []
+            setVoices(list.map(voice => ({ label: voice.name, value: voice.pth && voice.pth.file ? voice.pth.file : voice.name })))
+          } catch (error) { /* voices are optional */ }
+          try {
+            const value = await fetchJson('/ams/api/tts/models')
+            const list = value && value.data && Array.isArray(value.data.models) ? value.data.models : []
+            setTtsModels(list.map(model => ({ label: model.name, value: model.path })))
+          } catch (error) { /* tts models are optional */ }
+        })()
+      }, [])
 
       const saveConnection = async () => {
         setConnBusy(true)
@@ -512,7 +530,7 @@ window.__ModuleLoader__.load({
             }, item.label))),
           h(FeatureTab, {
             tab: tab, form: form, summary: summary, message: messages[tab.id],
-            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport
+            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, dynamicOptions: { voices: voices, ttsModels: ttsModels }
           })),
 
         h('div', { style: cardStyle() },

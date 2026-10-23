@@ -119,6 +119,8 @@ async function gatewayRequest(path, options) {
 
 function gatewayHealth() { return gatewayRequest('/health') }
 function gatewayJobs(limit) { return gatewayRequest('/jobs?limit=' + String(limit)) }
+function gatewayVoices() { return gatewayRequest('/voices') }
+function gatewayTtsModels() { return gatewayRequest('/tts/models') }
 function gatewayJob(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId)) }
 function gatewayCancel(jobId) {
   return gatewayRequest('/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' })
@@ -586,6 +588,8 @@ export function apply(ctx) {
           return
         }
         if (joined === 'summary' && req.method === 'GET') { sendJson(res, 200, await summaryPayload(auth)); return }
+        if (joined === 'voices' && req.method === 'GET') { sendJson(res, 200, await gatewayVoices()); return }
+        if (joined === 'tts/models' && req.method === 'GET') { sendJson(res, 200, await gatewayTtsModels()); return }
         if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
         if (joined === 'jobs' && req.method === 'GET') { sendJson(res, 200, await gatewayJobs(50)); return }
         if (joined === 'projects/import' && req.method === 'POST') {
