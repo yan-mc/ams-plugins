@@ -124,6 +124,14 @@ function gatewayCancel(jobId) {
   return gatewayRequest('/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' })
 }
 
+function gatewayImportAsset(sourcePath, projectId) {
+  return gatewayRequest('/projects/import', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source_path: sourcePath, project_id: projectId || null })
+  })
+}
+
 function gatewaySubmit(type, params) {
   return gatewayRequest('/jobs', {
     method: 'POST',
@@ -580,6 +588,13 @@ export function apply(ctx) {
         if (joined === 'summary' && req.method === 'GET') { sendJson(res, 200, await summaryPayload(auth)); return }
         if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
         if (joined === 'jobs' && req.method === 'GET') { sendJson(res, 200, await gatewayJobs(50)); return }
+        if (joined === 'projects/import' && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const sourcePath = body && typeof body.source_path === 'string' ? body.source_path : ''
+          if (!sourcePath) { sendJson(res, 400, { ok: false, error: { code: 'AMS_INVALID_PARAMS', message: 'source_path required' } }); return }
+          sendJson(res, 200, await gatewayImportAsset(sourcePath, body && body.project_id))
+          return
+        }
         if (joined === 'jobs' && req.method === 'POST') {
           const body = await readJsonBody(req)
           const type = body && typeof body.type === 'string' && body.type !== '' ? body.type : 'ping'

@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
         note: '训练音色模型（RVC 管线）。参数按协议透传给 Gateway；若当前 Gateway 未注册 train.rvc，提交会在页面显示错误原因。',
         submitLabel: '开始炼制',
         fields: [
-          { key: 'dataset_dir', label: '训练数据集目录', placeholder: 'F:/AMS/dataset/我的音色' },
+          { key: 'dataset_dir', label: '训练数据集目录', placeholder: 'F:/AMS/dataset/我的音色', importable: true },
           { key: 'model', label: '模型名', placeholder: '我的音色' },
           { key: 'epochs', label: 'Epochs', kind: 'number', initial: '100' },
           { key: 'batch_size', label: 'Batch size', kind: 'number', initial: '8' },
@@ -54,7 +54,7 @@ window.__ModuleLoader__.load({
         note: 'pymss 人声/伴奏分离（GPU 串行队列）。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
         submitLabel: '开始分离',
         fields: [
-          { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/song.wav' },
+          { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/song.wav', importable: true },
           { key: 'output_dir', label: '输出目录', placeholder: 'F:/AMS/output/separate' }
         ]
       },
@@ -63,10 +63,10 @@ window.__ModuleLoader__.load({
         note: 'RVC 变声：输入音频 + 目标音色模型。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
         submitLabel: '开始变声',
         fields: [
-          { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/voice.wav' },
+          { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/voice.wav', importable: true },
           { key: 'voice', label: '目标音色', placeholder: '曼波' },
           { key: 'model', label: '模型（.pth/名称）', placeholder: '曼波.pth' },
-          { key: 'index_path', label: '索引（可选 .index）', placeholder: '曼波.index' },
+          { key: 'index_path', label: '索引（可选 .index）', placeholder: '曼波.index', importable: true },
           { key: 'pitch', label: '变调（半音）', kind: 'number', initial: '0' },
           { key: 'f0_method', label: 'F0 方法', kind: 'select', options: ['rmvpe', 'harvest', 'pm', 'crepe'], initial: 'rmvpe' },
           { key: 'output_dir', label: '输出目录', placeholder: 'F:/AMS/output/convert' }
@@ -77,17 +77,20 @@ window.__ModuleLoader__.load({
         note: 'MSVC 歌曲换源：用已炼制模型替换歌曲音色。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
         submitLabel: '开始换源',
         fields: [
-          { key: 'input_path', label: '输入歌曲', placeholder: 'F:/AMS/input/song.wav' },
+          { key: 'input_path', label: '输入歌曲', placeholder: 'F:/AMS/input/song.wav', importable: true },
           { key: 'model', label: '模型（.pth/名称）', placeholder: '我的音色.pth' },
           { key: 'voice', label: '目标音色（可选）', placeholder: '曼波' },
           { key: 'output_dir', label: '输出目录', placeholder: 'F:/AMS/output/remix' }
         ]
       },
       {
-        id: 'tts', label: 'TTS 占位', jobType: null,
-        note: 'TTS 将在 M2 接入（内置默认音色曼波，不随仓库分发）；当前仅占位，不提交任务。',
-        submitLabel: '暂未开放',
-        fields: []
+        id: 'tts', label: 'TTS 语音合成', jobType: 'tts.synthesize',
+        note: 'Piper 离线 TTS：文本提交给 Gateway，产物写入 data/artifacts。模型/音色可留空使用默认 zh_CN-huayan-medium。',
+        submitLabel: '开始合成',
+        fields: [
+          { key: 'text', label: '要合成的文本', kind: 'textarea', placeholder: '输入文本（最多 2000 字）' },
+          { key: 'model', label: '模型（可选 .onnx）', placeholder: '留空使用 data/runtime/tts 默认模型' }
+        ]
       }
     ]
 
@@ -321,12 +324,19 @@ window.__ModuleLoader__.load({
       const field = props.field
       const value = props.value
       const onChange = props.onChange
+      const onImport = props.onImport
       const common = { style: fieldInputStyle(), value: value, onChange: event => onChange(field.key, event.target.value) }
+      const control = field.kind === 'select'
+        ? h('select', common, field.options.map(option => h('option', { key: option, value: option }, option)))
+        : field.kind === 'textarea'
+          ? h('textarea', Object.assign({ rows: 5, placeholder: field.placeholder || '' }, common))
+          : h('input', Object.assign({ type: field.kind === 'number' ? 'number' : 'text', placeholder: field.placeholder || '' }, common))
       return h('label', { style: { display: 'block', marginBottom: 10 } },
         h('span', { style: { display: 'block', color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, field.label),
-        field.kind === 'select'
-          ? h('select', common, field.options.map(option => h('option', { key: option, value: option }, option)))
-          : h('input', Object.assign({ type: field.kind === 'number' ? 'number' : 'text', placeholder: field.placeholder || '' }, common)))
+        control,
+        field.importable
+          ? h('button', { type: 'button', disabled: !value, onClick: () => { void onImport(field.key, value) }, style: { marginTop: 5, background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 9px', fontSize: 12, cursor: value ? 'pointer' : 'not-allowed' } }, '导入到 data')
+          : null)
     }
 
     function FeatureTab(props) {
@@ -337,12 +347,13 @@ window.__ModuleLoader__.load({
       const busy = props.busy
       const onChange = props.onChange
       const onSubmit = props.onSubmit
+      const onImport = props.onImport
       const registered = new Set((summary && Array.isArray(summary.jobTypes) ? summary.jobTypes : []).map(item => item.type))
       const available = tab.jobType !== null && registered.has(tab.jobType)
       return h('div', null,
         tab.note ? h('div', { style: { color: available ? COLORS.muted : COLORS.warn, fontSize: 12, marginBottom: 12, lineHeight: 1.6 } }, tab.note) : null,
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0 16px' } },
-          tab.fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange }))),
+          tab.fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport }))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 } },
           h('button', {
             style: {
@@ -418,6 +429,24 @@ window.__ModuleLoader__.load({
         })
       }
 
+      const onImport = async (key, value) => {
+        const source = String(value || '').trim()
+        if (!source) return
+        try {
+          const result = await fetchJson('/ams/api/projects/import', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ source_path: source })
+          })
+          const target = result && result.data && result.data.path ? result.data.path : ''
+          if (!target) throw new Error('导入返回缺少路径')
+          onChange(key, target)
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已导入到 ' + target } }))
+        } catch (error) {
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '导入失败：' + String(error && error.message ? error.message : error) } }))
+        }
+      }
+
       const onSubmit = async () => {
         if (tab.jobType === null || busyTab !== null) return
         setBusyTab(tab.id)
@@ -483,7 +512,7 @@ window.__ModuleLoader__.load({
             }, item.label))),
           h(FeatureTab, {
             tab: tab, form: form, summary: summary, message: messages[tab.id],
-            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit
+            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport
           })),
 
         h('div', { style: cardStyle() },
