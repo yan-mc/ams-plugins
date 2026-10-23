@@ -1,5 +1,10 @@
 # ams-plugins（AMS 音乐插件，M1 功能页版）
 
+> **AMS Studio 子项目 · 插件层**  
+> 为 AMS Kernel 提供“AMS 音乐工作站”页面、Host 工具桥和本地 Gateway 的鉴权/SSE 连接。它是用户看到的功能页与后端任务系统之间的桥。  
+> 总仓库：https://github.com/yan-mc/AMS-Studio
+
+
 > 阶段：M0.6 最小闭环 → M1 加固（鉴权 + SSE）→ **M1 功能页（四功能 + TTS 占位 + 任务操作）**｜2026-10-19
 > 依据：06_方案设计/00_总体设计与约定.md 第 9/10 节、06_方案设计/02_主体/主体详细方案.md、07_执行计划/M0_计划.md
 > 目标：在 DSH fork（ams-harness，dsh-v0.2.1-rc.2）+ 本地 Gateway（ams-services/gateway）上提供
