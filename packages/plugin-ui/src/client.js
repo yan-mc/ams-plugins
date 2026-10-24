@@ -377,6 +377,7 @@ window.__ModuleLoader__.load({
       const onSaveTemplate = props.onSaveTemplate
       const onApplyTemplate = props.onApplyTemplate
       const onDeleteTemplate = props.onDeleteTemplate
+      const onImportTemplate = props.onImportTemplate
       const [selectedTemplate, setSelectedTemplate] = React.useState('')
       const dynamicOptions = props.dynamicOptions || {}
       const fields = tab.fields.map(field => field.optionsKey ? Object.assign({}, field, { options: dynamicOptions[field.optionsKey] || [] }) : field)
@@ -398,7 +399,15 @@ window.__ModuleLoader__.load({
           } }, '保存当前'),
           h('button', { type: 'button', disabled: !selectedTemplate, style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '3px 8px', fontSize: 12 }, onClick: () => {
             if (selectedTemplate && window.confirm('把模板移动到 data/trash？')) onDeleteTemplate(selectedTemplate)
-          } }, '删除')) : null,
+          } }, '删除'),
+          h('button', { type: 'button', disabled: !selectedTemplate, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 8px', fontSize: 12 }, onClick: () => {
+            const item = templates.find(entry => entry.name === selectedTemplate)
+            if (!item) return
+            const blob = new Blob([JSON.stringify({ schema: 'ams.param-template/1', kind: item.kind, name: item.name, params: item.params || {} }, null, 2)], { type: 'application/json' })
+            const url = URL.createObjectURL(blob); const anchor = document.createElement('a')
+            anchor.href = url; anchor.download = item.kind + '-' + item.name + '.json'; anchor.click(); URL.revokeObjectURL(url)
+          } }, '导出'),
+          h('button', { type: 'button', style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 8px', fontSize: 12 }, onClick: onImportTemplate }, '导入')) : null,
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0 16px' } },
           fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport, onPickFile: onPickFile }))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 } },
@@ -503,11 +512,16 @@ window.__ModuleLoader__.load({
       const onUse = props.onUse
       const onOpen = props.onOpen
       const onPreview = props.onPreview
+      const onBindIndex = props.onBindIndex
+      const onUnbindIndex = props.onUnbindIndex
+      const onImport = props.onImport
+      const onExport = props.onExport
       const previews = props.previews || {}
       return h('div', null,
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 } },
           h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '共 ' + items.length + ' 个音源；删除只移动到 data/trash，不物理删除。'),
-          h('button', { type: 'button', onClick: onOpen, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px', fontSize: 12 } }, '打开音源目录')),
+          h('button', { type: 'button', onClick: onOpen, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px', fontSize: 12 } }, '打开音源目录'),
+          h('button', { type: 'button', onClick: onImport, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px', fontSize: 12 } }, '导入 voicepack')),
         items.length === 0 ? h('div', { style: { color: COLORS.warn, fontSize: 13 } }, '音源目录为空。请用启动器安装或放入 data/voices/<名称>/<名称>.pth。') : null,
         items.map(item => {
           const m = meta[item.name] || { tags: [], note: '', favorite: false }
@@ -520,6 +534,9 @@ window.__ModuleLoader__.load({
               h('label', { style: { color: COLORS.muted, fontSize: 12 } }, h('input', { type: 'checkbox', checked: Boolean(m.favorite), onChange: e => onChange(item.name, 'favorite', e.target.checked) }), ' 收藏'),
               h('button', { type: 'button', disabled: busy, onClick: () => onUse(item), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '用于歌曲换源'),
               h('button', { type: 'button', disabled: busy, onClick: () => onPreview(item), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '试听'),
+              h('button', { type: 'button', disabled: busy, onClick: () => onBindIndex(item.name), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '绑定 index'),
+              h('button', { type: 'button', disabled: busy, onClick: () => onExport(item.name), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '导出 voicepack'),
+              item.index ? h('button', { type: 'button', disabled: busy, onClick: () => onUnbindIndex(item.name), style: { background: 'transparent', color: COLORS.warn, border: '1px solid ' + COLORS.warn, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '解绑 index') : null,
               h('button', { type: 'button', disabled: busy, onClick: () => onTrash(item.name), style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '移入回收站')),
             previews[item.name] ? h('audio', { controls: true, src: previews[item.name], style: { width: '100%', marginTop: 6 } }) : null,
             h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
@@ -550,6 +567,7 @@ window.__ModuleLoader__.load({
       const [libraryBusy, setLibraryBusy] = React.useState(false)
       const [voicePreviews, setVoicePreviews] = React.useState({})
       const [previewBusy, setPreviewBusy] = React.useState(null)
+      const [jobAudioUrl, setJobAudioUrl] = React.useState('')
       const [ttsBatchBusy, setTtsBatchBusy] = React.useState(false)
       const [ttsBatchMessage, setTtsBatchMessage] = React.useState(null)
       const [cancelBusy, setCancelBusy] = React.useState(null)
@@ -790,6 +808,98 @@ window.__ModuleLoader__.load({
         } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '试听失败：' + String(error && error.message ? error.message : error) } })) }
         finally { setPreviewBusy(null) }
       }
+      const refreshLibrary = async () => {
+        const value = await fetchJson('/ams/api/voices')
+        const list = value && value.data && Array.isArray(value.data.voices) ? value.data.voices : []
+        setLibraryVoices(list)
+        setVoices(list.map(voice => ({ label: voice.name, value: voice.pth && voice.pth.file ? voice.pth.file : voice.name, index: voice.index && voice.index.file ? voice.index.file : '' })))
+      }
+      const pickVoiceIndex = name => {
+        const picker = document.createElement('input')
+        picker.type = 'file'; picker.accept = '.index'; picker.style.display = 'none'
+        document.body.appendChild(picker)
+        picker.onchange = async () => {
+          const file = picker.files && picker.files[0]
+          picker.remove()
+          if (!file) return
+          setLibraryBusy(true)
+          try {
+            const response = await fetch('/ams/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: file })
+            const text = await response.text(); let body = null
+            try { body = text ? JSON.parse(text) : null } catch { body = null }
+            if (!response.ok || !body || !body.data || !body.data.path) throw new Error(body && body.error && body.error.message ? body.error.message : '上传失败')
+            await fetchJson('/ams/api/voice-index', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, index_path: body.data.path }) })
+            await refreshLibrary()
+            setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '已绑定 index：' + name } }))
+          } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '绑定失败：' + String(error && error.message ? error.message : error) } })) }
+          finally { setLibraryBusy(false) }
+        }
+        picker.click()
+      }
+      const unbindVoiceIndex = async name => {
+        if (!window.confirm('把 index 移入 data/trash？音色仍可用，index_rate 将失效。')) return
+        setLibraryBusy(true)
+        try {
+          await fetchJson('/ams/api/voice-index', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, index_path: '' }) })
+          await refreshLibrary()
+          setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '已解绑 index：' + name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '解绑失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setLibraryBusy(false) }
+      }
+      const importVoicepack = () => {
+        const picker = document.createElement('input')
+        picker.type = 'file'; picker.accept = '.zip'; picker.style.display = 'none'
+        document.body.appendChild(picker)
+        picker.onchange = async () => {
+          const file = picker.files && picker.files[0]
+          picker.remove()
+          if (!file) return
+          setLibraryBusy(true)
+          try {
+            const response = await fetch('/ams/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: file })
+            const text = await response.text(); let body = null
+            try { body = text ? JSON.parse(text) : null } catch { body = null }
+            if (!response.ok || !body || !body.data || !body.data.path) throw new Error(body && body.error && body.error.message ? body.error.message : '上传失败')
+            const base = file.name.replace(/\.zip$/i, '')
+            const name = window.prompt('导入后的音色名称', base) || base
+            const result = await fetchJson('/ams/api/voice-import', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ archive_path: body.data.path, name }) })
+            await refreshLibrary()
+            setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '已导入音色：' + result.data.name } }))
+          } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '导入失败：' + String(error && error.message ? error.message : error) } })) }
+          finally { setLibraryBusy(false) }
+        }
+        picker.click()
+      }
+      const exportVoicepack = async name => {
+        setLibraryBusy(true)
+        try {
+          const result = await fetchJson('/ams/api/voice-export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) })
+          setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '已导出：' + result.data.path } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '导出失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setLibraryBusy(false) }
+      }
+      const importTemplate = kind => {
+        const picker = document.createElement('input')
+        picker.type = 'file'; picker.accept = '.json'; picker.style.display = 'none'
+        document.body.appendChild(picker)
+        picker.onchange = async () => {
+          const file = picker.files && picker.files[0]
+          picker.remove()
+          if (!file) return
+          try {
+            const text = await file.text()
+            const parsed = JSON.parse(text)
+            const params = parsed.params || parsed
+            const name = window.prompt('导入模板名称', parsed.name || file.name.replace(/\.json$/i, ''))
+            if (!name) return
+            await fetchJson('/ams/api/templates', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind, name, params }) })
+            const value = await fetchJson('/ams/api/templates')
+            setTemplates(value && value.data && Array.isArray(value.data) ? value.data : [])
+            setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已导入模板：' + name } }))
+          } catch (error) { setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '模板导入失败：' + String(error && error.message ? error.message : error) } })) }
+        }
+        picker.click()
+      }
       const summary = consoleState.summary
       const gateway = summary && summary.gateway ? summary.gateway : null
       const tools = summary && Array.isArray(summary.tools) ? summary.tools : []
@@ -954,7 +1064,7 @@ window.__ModuleLoader__.load({
           activeTab === 'tts_batch'
             ? h(TtsBatchPanel, { models: ttsModels, busy: ttsBatchBusy, message: ttsBatchMessage, onSubmit: (text, models) => { void submitTtsBatch(text, models) } })
             : activeTab === 'library'
-            ? h(VoiceLibrary, { items: libraryVoices, meta: voiceMeta, busy: libraryBusy || previewBusy !== null, previews: voicePreviews, onChange: changeVoiceMeta, onSave: saveVoiceMeta, onTrash: trashVoice, onUse: useLibraryVoice, onPreview: (item) => { void previewLibraryVoice(item) }, onOpen: () => { void onOpenFolder('rvc_voices') } })
+            ? h(VoiceLibrary, { items: libraryVoices, meta: voiceMeta, busy: libraryBusy || previewBusy !== null, previews: voicePreviews, onChange: changeVoiceMeta, onSave: saveVoiceMeta, onTrash: trashVoice, onUse: useLibraryVoice, onPreview: (item) => { void previewLibraryVoice(item) }, onBindIndex: pickVoiceIndex, onUnbindIndex: (name) => { void unbindVoiceIndex(name) }, onImport: importVoicepack, onExport: (name) => { void exportVoicepack(name) }, onOpen: () => { void onOpenFolder('rvc_voices') } })
             : activeTab === 'realtime'
             ? h(VcPanel, {
                 devices: vcDevices, status: vcStatus, form: vcForm, busy: vcBusy, message: vcMessage,
@@ -963,7 +1073,7 @@ window.__ModuleLoader__.load({
             : h(FeatureTab, {
                 tab: tab, form: form, summary: summary, message: messages[tab.id],
                 busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels },
-                templates: activeTemplates, onSaveTemplate: saveTemplate, onApplyTemplate: applyTemplate, onDeleteTemplate: deleteTemplate
+                templates: activeTemplates, onSaveTemplate: saveTemplate, onApplyTemplate: applyTemplate, onDeleteTemplate: deleteTemplate, onImportTemplate: () => importTemplate(templateKind)
               })),
 
         h('div', { style: cardStyle() },
@@ -1008,7 +1118,10 @@ window.__ModuleLoader__.load({
                         disabled: cancelBusy === job.id,
                         onClick: () => { void onCancel(job.id) }
                       }, cancelBusy === job.id ? '取消中…' : '取消')
-                    : h('span', { style: { color: COLORS.muted } }, '-'))))))),
+                    : h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+                        job.status === 'succeeded' ? h('button', { type: 'button', onClick: () => setJobAudioUrl('/ams/api/job-audio/' + job.id), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '试听') : null,
+                        h('span', { style: { color: COLORS.muted } }, '-'))))))),
+          jobAudioUrl ? h('div', { style: { marginTop: 10 } }, h('audio', { controls: true, src: jobAudioUrl, style: { width: '100%' } })) : null),
 
         h('div', { style: cardStyle() },
           h('h2', { style: { margin: '0 0 10px', fontSize: 16 } }, '运行状态'),

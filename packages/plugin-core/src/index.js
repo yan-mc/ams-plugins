@@ -11,8 +11,8 @@
  *
  * The Gateway token never leaves this Host process.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync, renameSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync, renameSync, cpSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -135,6 +135,56 @@ async function previewVoice(body) {
     }
   }
   throw new Error('试听任务超时')
+}
+
+
+function tarExe() { return join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') }
+
+function findPth(dir, depth = 0) {
+  if (depth > 4) return null
+  let entries = []
+  try { entries = readdirSync(dir) } catch { return null }
+  for (const entry of entries) {
+    const full = join(dir, entry)
+    let info
+    try { info = statSync(full) } catch { continue }
+    if (info.isFile() && entry.toLowerCase().endsWith('.pth')) return full
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry)
+    try { if (statSync(full).isDirectory()) { const found = findPth(full, depth + 1); if (found) return found } } catch { /* skip */ }
+  }
+  return null
+}
+
+function exportVoicepack(name) {
+  const source = join(resolveAmsHome(), 'voices', safeVoiceName(name))
+  if (!existsSync(source) || !statSync(source).isDirectory()) throw new Error('音色不存在')
+  if (!existsSync(tarExe())) throw new Error('Windows tar.exe 不可用')
+  const dir = join(resolveAmsHome(), 'exports', 'voicepacks')
+  mkdirSync(dir, { recursive: true })
+  const target = join(dir, safeVoiceName(name) + '-' + Date.now() + '.zip')
+  const result = spawnSync(tarExe(), ['-a', '-c', '-f', target, '-C', source, '.'], { windowsHide: true, encoding: 'utf8' })
+  if (result.status !== 0) throw new Error('打包失败：' + String(result.stderr || result.error || '').slice(0, 500))
+  return target
+}
+
+function importVoicepack(archive, requestedName) {
+  const file = String(archive || '')
+  if (!file.toLowerCase().endsWith('.zip') || !existsSync(file)) throw new Error('voicepack zip 不存在')
+  const tmp = join(resolveAmsHome(), 'tmp', 'voice-import-' + randomBytes(6).toString('hex'))
+  mkdirSync(tmp, { recursive: true })
+  const result = spawnSync(tarExe(), ['-xf', file, '-C', tmp], { windowsHide: true, encoding: 'utf8' })
+  if (result.status !== 0) throw new Error('解包失败：' + String(result.stderr || result.error || '').slice(0, 500))
+  const pth = findPth(tmp)
+  if (!pth) throw new Error('voicepack 中没有 .pth')
+  const name = safeVoiceName(requestedName || pth.split(/[\\/]/).pop().replace(/\.pth$/i, ''))
+  const sourceDir = pth.includes(tmp + sep) ? dirname(pth) : tmp
+  const target = join(resolveAmsHome(), 'voices', name)
+  if (existsSync(target)) moveToTrash(target, 'voices')
+  mkdirSync(target, { recursive: true })
+  cpSync(sourceDir, target, { recursive: true })
+  return { name, path: target }
 }
 
 const DATA_FOLDERS = {
@@ -820,6 +870,25 @@ export function apply(ctx) {
           } catch (error) { sendJson(res, 500, { ok: false, error: { code: 'VOICE_PREVIEW_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
         }
+        if (joined.startsWith('job-audio/') && req.method === 'GET') {
+          try {
+            const jobId = joined.slice('job-audio/'.length)
+            if (!/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('非法 job id')
+            const list = await gatewayArtifacts(jobId)
+            const artifacts = Array.isArray(list.data) ? list.data : (Array.isArray(list) ? list : [])
+            const audio = artifacts.find(entry => String(entry.kind || '').indexOf('audio') >= 0 || String(entry.name || '').toLowerCase().endsWith('.wav'))
+            if (!audio || !audio.id) throw new Error('该任务没有音频产物')
+            const info = readGatewayInfo()
+            const upstream = await fetch(info.base + '/artifacts/' + encodeURIComponent(audio.id) + '/download', { headers: { authorization: 'Bearer ' + info.token } })
+            if (!upstream.ok) throw new Error('artifact HTTP ' + upstream.status)
+            const buffer = Buffer.from(await upstream.arrayBuffer())
+            res.statusCode = 200
+            res.setHeader('content-type', 'audio/wav')
+            res.setHeader('content-length', String(buffer.length))
+            res.end(buffer)
+          } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'JOB_AUDIO_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
         if (joined.startsWith('artifact/') && req.method === 'GET') {
           try {
             const id = joined.slice('artifact/'.length)
@@ -833,6 +902,18 @@ export function apply(ctx) {
             res.setHeader('content-length', String(buffer.length))
             res.end(buffer)
           } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'ARTIFACT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'schemas' && req.method === 'GET') {
+          const dir = join(resolveAmsHome(), 'config', 'schemas')
+          const result = {}
+          try {
+            for (const entry of readdirSync(dir)) {
+              if (!entry.endsWith('.json')) continue
+              try { result[entry.slice(0, -5)] = JSON.parse(readFileSync(join(dir, entry), 'utf8')) } catch { /* skip */ }
+            }
+          } catch { /* none */ }
+          sendJson(res, 200, { ok: true, data: result })
           return
         }
         if (joined === 'templates' && req.method === 'GET') { sendJson(res, 200, { ok: true, data: listTemplates() }); return }
@@ -888,6 +969,50 @@ export function apply(ctx) {
             renameSync(tmp, file)
             sendJson(res, 200, { ok: true, data: next })
           } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_META_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'voice-import' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const imported = importVoicepack(String(body.archive_path || ''), String(body.name || ''))
+            sendJson(res, 200, { ok: true, data: imported })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_IMPORT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'voice-export' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const path = exportVoicepack(String(body.name || ''))
+            sendJson(res, 200, { ok: true, data: { path } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_EXPORT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'voice-index' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const name = safeVoiceName(body.name)
+            const dir = join(resolveAmsHome(), 'voices', name)
+            if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Error('音色不存在')
+            const target = join(dir, name + '.index')
+            if (body.index_path) {
+              const source = String(body.index_path)
+              if (!source.toLowerCase().endsWith('.index') || !existsSync(source)) throw new Error('index 文件不存在或扩展名错误')
+              if (existsSync(target)) moveToTrash(target, 'indexes')
+              const tmp = target + '.tmp'
+              writeFileSync(tmp, readFileSync(source))
+              renameSync(tmp, target)
+            } else if (existsSync(target)) {
+              moveToTrash(target, 'indexes')
+            }
+            const meta = readVoiceMetadata(name)
+            meta.index_bound = Boolean(body.index_path) && existsSync(target)
+            meta.updated_at = new Date().toISOString()
+            const file = join(dir, 'voice.json')
+            const tmp = file + '.tmp'
+            writeFileSync(tmp, JSON.stringify(meta, null, 2))
+            renameSync(tmp, file)
+            sendJson(res, 200, { ok: true, data: { name, index_bound: meta.index_bound } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_INDEX_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
         }
         if (joined === 'voice-trash' && req.method === 'POST') {
