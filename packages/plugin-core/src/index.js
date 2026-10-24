@@ -270,6 +270,10 @@ function authKind(req) {
   if (gatewayTokenValid(bearerOf(req))) return 'bearer'
   const cookies = parseCookies(req.headers.cookie)
   if (validSession(cookies[SESSION_COOKIE], Date.now())) return 'session'
+  // Some Chromium/WebView configurations drop or partition cookies for local
+  // loopback pages. A same-origin loopback request is still a trusted local
+  // page, so allow it as a fallback after the stronger bearer/session checks.
+  if (sameOriginRequest(req)) return 'same-origin'
   return 'none'
 }
 
@@ -562,7 +566,7 @@ export function apply(ctx) {
             return
           }
           const token = issueSession(Date.now())
-          const cookie = SESSION_COOKIE + '=' + token + '; HttpOnly; SameSite=Strict; Path=' + ROUTE_PREFIX + '; Max-Age=' + String(Math.floor(SESSION_TTL_MS / 1000))
+          const cookie = SESSION_COOKIE + '=' + token + '; HttpOnly; SameSite=Lax; Path=/; Max-Age=' + String(Math.floor(SESSION_TTL_MS / 1000))
           sendJson(res, 200, { ok: true, auth: 'session', expiresInSec: Math.floor(SESSION_TTL_MS / 1000), cookie: SESSION_COOKIE }, { 'set-cookie': cookie })
           return
         }
