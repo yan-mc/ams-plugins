@@ -11,9 +11,9 @@
  *
  * The Gateway token never leaves this Host process.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -57,9 +57,30 @@ function openDataFolder(kind) {
   mkdirSync(path, { recursive: true })
   if (!existsSync(path)) throw new Error('目录创建失败：' + String(kind))
   if (process.platform !== 'win32') throw new Error('当前平台不支持打开目录')
-  const child = spawn('explorer.exe', [path], { detached: true, stdio: 'ignore', windowsHide: true })
+  // Do not pass windowsHide here: Explorer is a GUI process. Some builds
+  // interpret CREATE_NO_WINDOW as a hidden launch and show no window.
+  const child = spawn('explorer.exe', [path], { detached: true, stdio: 'ignore' })
+  child.on('error', () => { /* the path is returned to the UI as fallback */ })
   child.unref()
   return path
+}
+
+async function saveUploadedFile(req, requestedName) {
+  const root = resolve(resolveAmsHome())
+  const rawName = basename(String(requestedName || 'upload.bin')).replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 180) || 'upload.bin'
+  const id = randomBytes(8).toString('hex')
+  const dir = resolve(root, 'projects', 'imports', 'unscoped', id)
+  if (dir !== root && !dir.startsWith(root + sep)) throw new Error('上传目录不在 AMS data 内')
+  mkdirSync(dir, { recursive: true })
+  const dest = join(dir, rawName)
+  const out = createWriteStream(dest)
+  await new Promise((resolvePromise, reject) => {
+    req.on('error', reject)
+    out.on('error', reject)
+    out.on('finish', resolvePromise)
+    req.pipe(out)
+  })
+  return { path: dest, size: out.bytesWritten }
 }
 
 function connectionPath() {
@@ -620,10 +641,20 @@ export function apply(ctx) {
           try {
             const body = await readJsonBody(req)
             const kind = body && typeof body.kind === 'string' ? body.kind : ''
-            openDataFolder(kind)
-            sendJson(res, 200, { ok: true, kind, message: '已打开数据目录' })
+            const path = openDataFolder(kind)
+            sendJson(res, 200, { ok: true, kind, path, message: '已打开数据目录' })
           } catch (error) {
             sendJson(res, 400, { ok: false, error: { code: 'AMS_OPEN_FOLDER_FAILED', message: String(error && error.message ? error.message : error) } })
+          }
+          return
+        }
+        if (joined === 'upload' && req.method === 'POST') {
+          try {
+            const uploadName = new URL(String(req.url), 'http://localhost').searchParams.get('name') || 'upload.bin'
+            const saved = await saveUploadedFile(req, uploadName)
+            sendJson(res, 200, { ok: true, data: saved })
+          } catch (error) {
+            sendJson(res, 502, { ok: false, error: { code: 'AMS_UPLOAD_FAILED', message: String(error && error.message ? error.message : error) } })
           }
           return
         }

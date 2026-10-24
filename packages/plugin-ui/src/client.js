@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
       },
       {
         id: 'convert', label: '歌曲换源', jobType: 'convert.rvc',
-        folder: { kind: 'rvc_voices', label: '打开变声音源目录' },
+        folder: { kind: 'rvc_voices', label: '打开变声音源目录', path: 'data/voices' },
         note: '输入已分离好的纯人声，输出目标音色的纯人声。不混伴奏，不使用 MSVC。',
         submitLabel: '开始换源',
         fields: [
@@ -74,7 +74,7 @@ window.__ModuleLoader__.load({
       },
       {
         id: 'tts', label: 'TTS 语音合成', jobType: 'tts.synthesize',
-        folder: { kind: 'tts_voices', label: '打开 TTS 音源目录' },
+        folder: { kind: 'tts_voices', label: '打开 TTS 音源目录', path: 'data/tts_voices' },
         note: 'Piper 离线 TTS：文本提交给 Gateway，产物写入 data/artifacts。TTS 音源与变声音源分开，可放入 data/tts_voices。',
         submitLabel: '开始合成',
         fields: [
@@ -315,6 +315,7 @@ window.__ModuleLoader__.load({
       const value = props.value
       const onChange = props.onChange
       const onImport = props.onImport
+      const onPickFile = props.onPickFile
       const common = { style: fieldInputStyle(), value: value, onChange: event => onChange(field.key, event.target.value) }
       const control = field.kind === 'select'
         ? h('select', common,
@@ -327,7 +328,9 @@ window.__ModuleLoader__.load({
         h('span', { style: { display: 'block', color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, field.label + (field.required ? ' *' : '')),
         control,
         field.importable
-          ? h('button', { type: 'button', disabled: !value, onClick: () => { void onImport(field.key, value) }, style: { marginTop: 5, background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 9px', fontSize: 12, cursor: value ? 'pointer' : 'not-allowed' } }, '导入到 data')
+          ? h('span', { style: { display: 'inline-flex', gap: 6, marginTop: 5, flexWrap: 'wrap' } },
+              h('button', { type: 'button', onClick: () => { void onPickFile(field.key) }, style: { background: COLORS.accent, color: '#fff', border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 9px', fontSize: 12, cursor: 'pointer' } }, '选择文件'),
+              h('button', { type: 'button', disabled: !value, onClick: () => { void onImport(field.key, value) }, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 9px', fontSize: 12, cursor: value ? 'pointer' : 'not-allowed' } }, '导入到 data'))
           : null)
     }
 
@@ -341,6 +344,7 @@ window.__ModuleLoader__.load({
       const onSubmit = props.onSubmit
       const onImport = props.onImport
       const onOpenFolder = props.onOpenFolder
+      const onPickFile = props.onPickFile
       const dynamicOptions = props.dynamicOptions || {}
       const fields = tab.fields.map(field => field.optionsKey ? Object.assign({}, field, { options: dynamicOptions[field.optionsKey] || [] }) : field)
       const registered = new Set((summary && Array.isArray(summary.jobTypes) ? summary.jobTypes : []).map(item => item.type))
@@ -348,7 +352,7 @@ window.__ModuleLoader__.load({
       return h('div', null,
         tab.note ? h('div', { style: { color: available ? COLORS.muted : COLORS.warn, fontSize: 12, marginBottom: 12, lineHeight: 1.6 } }, tab.note) : null,
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0 16px' } },
-          fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport }))),
+          fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport, onPickFile: onPickFile }))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 } },
           h('button', {
             style: {
@@ -364,6 +368,7 @@ window.__ModuleLoader__.load({
             onClick: () => { void onOpenFolder(tab.folder.kind) },
             style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }
           }, tab.folder.label) : null,
+          tab.folder ? h('span', { style: { color: COLORS.muted, fontSize: 11 } }, '路径：' + tab.folder.path) : null,
           tab.jobType !== null && !available
             ? h('span', { style: { color: COLORS.warn, fontSize: 12 } }, 'Gateway 当前未注册 ' + tab.jobType + '（可用：' + (summary && Array.isArray(summary.jobTypes) ? summary.jobTypes.map(item => item.type).join(', ') : '未知') + '）')
             : null,
@@ -482,15 +487,46 @@ window.__ModuleLoader__.load({
 
       const onOpenFolder = async kind => {
         try {
-          await fetchJson('/ams/api/open-folder', {
+          const result = await fetchJson('/ams/api/open-folder', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ kind })
           })
-          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已打开数据目录' } }))
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已请求打开目录：' + (result && result.path ? result.path : kind) } }))
         } catch (error) {
           setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '打开目录失败：' + String(error && error.message ? error.message : error) } }))
         }
+      }
+
+      const onPickFile = (key) => {
+        const tab = FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0]
+        const field = tab.fields.find(item => item.key === key)
+        const accept = (field && field.accept) || '.wav,.flac,.mp3,.m4a,.msvc,.pth,.onnx,.json,.zip'
+        const picker = document.createElement('input')
+        picker.type = 'file'
+        picker.accept = accept
+        picker.style.display = 'none'
+        document.body.appendChild(picker)
+        picker.onchange = async () => {
+          const file = picker.files && picker.files[0]
+          picker.remove()
+          if (!file) return
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '正在复制文件到 data…' } }))
+          try {
+            const response = await fetch('/ams/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: file })
+            const text = await response.text()
+            let body = null
+            try { body = text ? JSON.parse(text) : null } catch { body = { raw: text } }
+            if (!response.ok) throw new Error(body && body.error && body.error.message ? body.error.message : ('HTTP ' + response.status))
+            const target = body && body.data && body.data.path ? body.data.path : ''
+            if (!target) throw new Error('上传返回缺少路径')
+            onChange(key, target)
+            setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已选择并复制到：' + target } }))
+          } catch (error) {
+            setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '选择文件失败：' + String(error && error.message ? error.message : error) } }))
+          }
+        }
+        picker.click()
       }
 
       const onSubmit = async () => {
@@ -563,7 +599,7 @@ window.__ModuleLoader__.load({
             }, item.label))),
           h(FeatureTab, {
             tab: tab, form: form, summary: summary, message: messages[tab.id],
-            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, dynamicOptions: { voices: voices, ttsModels: ttsModels }
+            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels }
           })),
 
         h('div', { style: cardStyle() },
@@ -586,7 +622,8 @@ window.__ModuleLoader__.load({
             h('button', {
               style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: 'pointer' },
               onClick: () => { void onOpenFolder('artifacts') }
-            }, '打开产物目录')),
+            }, '打开产物目录'),
+            h('span', { style: { color: COLORS.muted, fontSize: 11 } }, '产物路径：data/artifacts/{job_id}')),
           messages.jobs ? h('div', { style: { color: messages.jobs.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginBottom: 8 } }, messages.jobs.text) : null,
           jobs.length === 0
             ? h('div', { style: { color: COLORS.muted, fontSize: 13 } }, '暂无任务。选择上方功能页提交，或在页面右上角点 ping 自检。')
