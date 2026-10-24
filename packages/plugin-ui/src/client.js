@@ -391,11 +391,12 @@ window.__ModuleLoader__.load({
       const onStop = props.onStop
       const onSwitch = props.onSwitch
       const inputs = devices && Array.isArray(devices.inputs) ? devices.inputs : []
+      const inputChoices = devices && Array.isArray(devices.input_choices) && devices.input_choices.length ? devices.input_choices : inputs
       const outputs = devices && Array.isArray(devices.outputs) ? devices.outputs : []
       const outputChoices = devices && Array.isArray(devices.output_choices) && devices.output_choices.length ? devices.output_choices : outputs
       const virtual = devices && Array.isArray(devices.virtual_outputs) ? devices.virtual_outputs : []
       const loopbacks = devices && Array.isArray(devices.wasapi_loopbacks) ? devices.wasapi_loopbacks : []
-      const inputOptions = inputs.map(item => ({ value: String(item.index), label: String(item.index) + " · " + item.name + (item.kind === "loopback" ? "（系统输出/回环）" : "") })).concat(loopbacks.map(item => ({ value: item.value, label: "WASAPI Loopback · " + item.name + (item.is_default ? "（默认输出）" : "") })))
+      const inputOptions = inputChoices.map(item => ({ value: String(item.index), label: item.display_name || item.name || ("输入 " + item.index) })).concat(loopbacks.map(item => ({ value: item.value, label: "WASAPI Loopback · " + item.name + (item.is_default ? "（默认输出）" : "") })))
       const outputOptions = outputChoices.map(item => ({ value: String(item.index), label: item.display_name || item.name || ("输出 " + item.index) }))
       const monitorOptions = [{ value: "", label: "不监听" }].concat(outputOptions)
       const select = { width: "100%", boxSizing: "border-box", padding: "6px 8px", borderRadius: 6, border: "1px solid " + COLORS.border, background: COLORS.bg, color: COLORS.text, fontSize: 13 }
@@ -488,7 +489,11 @@ window.__ModuleLoader__.load({
             if (devices) {
               setVcForm(previous => {
                 const next = Object.assign({}, previous)
-                if (!next.input_device) next.input_device = String(devices.default_input >= 0 ? devices.default_input : (devices.inputs[0] ? devices.inputs[0].index : ''))
+                if (!next.input_device) {
+                  const choices = Array.isArray(devices.input_choices) ? devices.input_choices : []
+                  const preferredInput = choices.find(item => item.is_default) || choices[0]
+                  next.input_device = String(preferredInput ? preferredInput.index : (devices.default_input >= 0 ? devices.default_input : (devices.inputs[0] ? devices.inputs[0].index : '')))
+                }
                 if (!next.output_device) {
                   const choices = Array.isArray(devices.output_choices) ? devices.output_choices : []
                   const virtualChoice = choices.find(item => item.is_virtual)
