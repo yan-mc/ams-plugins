@@ -84,6 +84,9 @@ window.__ModuleLoader__.load({
       }
     ]
 
+    const VC_TAB = { id: 'realtime', label: '实时变声', jobType: null, fields: [], note: '实时变声：独立 VC 服务，麦克风/系统输出 → RVC → VB-Cable。' }
+    const ALL_TABS = [VC_TAB].concat(FEATURE_TABS)
+
     function cardStyle(extra) {
       return Object.assign({
         background: COLORS.panel,
@@ -375,6 +378,43 @@ window.__ModuleLoader__.load({
           message ? h('span', { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12 } }, message.text) : null))
     }
 
+    function VcPanel(props) {
+      const devices = props.devices
+      const status = props.status || {}
+      const form = props.form || {}
+      const busy = props.busy
+      const message = props.message
+      const voices = props.voices || []
+      const onChange = props.onChange
+      const onRefresh = props.onRefresh
+      const onStart = props.onStart
+      const onStop = props.onStop
+      const inputs = devices && Array.isArray(devices.inputs) ? devices.inputs : []
+      const outputs = devices && Array.isArray(devices.outputs) ? devices.outputs : []
+      const virtual = devices && Array.isArray(devices.virtual_outputs) ? devices.virtual_outputs : []
+      const inputOptions = inputs.map(item => ({ value: String(item.index), label: String(item.index) + " · " + item.name + (item.kind === "loopback" ? "（系统输出/回环）" : "") }))
+      const outputOptions = outputs.map(item => ({ value: String(item.index), label: String(item.index) + " · " + item.name + (item.kind === "virtual" ? "（VB-Cable）" : "") }))
+      const select = { width: "100%", boxSizing: "border-box", padding: "6px 8px", borderRadius: 6, border: "1px solid " + COLORS.border, background: COLORS.bg, color: COLORS.text, fontSize: 13 }
+      return h("div", { style: cardStyle() },
+        h("div", { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10, lineHeight: 1.6 } }, "实时变声服务会占用麦克风/系统输出和 VB-Cable。先选输入、输出与音源，再点启动；停止后才释放设备。系统输出需要可用的“立体声混音/回环”输入设备。"),
+        devices ? h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "0 16px" } },
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "输入设备（麦克风 / 系统输出）"), h("select", { style: select, value: form.input_device || "", onChange: e => onChange("input_device", e.target.value) }, inputOptions.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "输出设备（VB-Cable 输入）"), h("select", { style: select, value: form.output_device || "", onChange: e => onChange("output_device", e.target.value) }, outputOptions.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "模式"), h("select", { style: select, value: form.mode || "rvc", onChange: e => onChange("mode", e.target.value) }, h("option", { value: "rvc" }, "RVC 变声"), h("option", { value: "passthrough" }, "直通（设备测试）"))),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "目标音色"), h("select", { style: select, value: form.voice || "", onChange: e => onChange("voice", e.target.value) }, h("option", { value: "" }, "请选择音色…"), voices.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "变调（半音）"), h("input", { type: "number", style: select, value: form.pitch === undefined ? "0" : form.pitch, onChange: e => onChange("pitch", e.target.value) })),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "索引混合率"), h("input", { type: "number", min: 0, max: 1, step: 0.05, style: select, value: form.index_rate === undefined ? "0" : form.index_rate, onChange: e => onChange("index_rate", e.target.value) })),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "F0 方法"), h("select", { style: select, value: form.f0method || "rmvpe", onChange: e => onChange("f0method", e.target.value) }, ["rmvpe", "pm", "harvest", "crepe"].map(item => h("option", { key: item, value: item }, item)))))
+          : h("div", { style: { color: COLORS.warn, fontSize: 12 } }, "正在检测设备…"),
+        h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 } },
+          h("button", { type: "button", disabled: busy, onClick: onRefresh, style: { background: "transparent", color: COLORS.accent, border: "1px solid " + COLORS.accent, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "刷新设备"),
+          h("button", { type: "button", disabled: busy || status.running, onClick: onStart, style: { background: COLORS.accent, color: "#fff", border: "1px solid " + COLORS.accent, borderRadius: 5, padding: "5px 12px", fontSize: 12 } }, status.running ? "运行中" : "启动实时变声"),
+          h("button", { type: "button", disabled: busy || !status.running, onClick: onStop, style: { background: "transparent", color: COLORS.err, border: "1px solid " + COLORS.err, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "停止")),
+        status.running ? h("div", { style: { color: COLORS.ok, fontSize: 12, marginTop: 8 } }, "运行中 · " + (status.mode || "") + " · " + String(status.samplerate || "") + " Hz · frames=" + String(status.frames || 0)) : null,
+        status.last_error ? h("div", { style: { color: COLORS.err, fontSize: 12, marginTop: 8 } }, "错误：" + status.last_error) : null,
+        message ? h("div", { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginTop: 8 } }, message.text) : null
+      )
+    }
     function AmsHomePage() {
       const consoleState = useAmsConsole()
       const [activeTab, setActiveTab] = React.useState('convert')
@@ -393,6 +433,11 @@ window.__ModuleLoader__.load({
       const [connKey, setConnKey] = React.useState('')
       const [connBusy, setConnBusy] = React.useState(false)
       const [connMessage, setConnMessage] = React.useState('')
+      const [vcDevices, setVcDevices] = React.useState(null)
+      const [vcStatus, setVcStatus] = React.useState({})
+      const [vcForm, setVcForm] = React.useState({ mode: 'rvc', f0method: 'rmvpe', pitch: '0', index_rate: '0' })
+      const [vcBusy, setVcBusy] = React.useState(false)
+      const [vcMessage, setVcMessage] = React.useState(null)
 
       const refreshConnection = React.useCallback(async () => {
         try {
@@ -427,6 +472,67 @@ window.__ModuleLoader__.load({
         })
       }, [voices])
 
+      const refreshVc = React.useCallback(async (loadDevices) => {
+        try {
+          if (loadDevices) {
+            const value = await fetchJson('/ams/api/vc/devices')
+            const devices = value && value.data ? value.data : null
+            setVcDevices(devices)
+            if (devices) {
+              setVcForm(previous => {
+                const next = Object.assign({}, previous)
+                if (!next.input_device) next.input_device = String(devices.default_input >= 0 ? devices.default_input : (devices.inputs[0] ? devices.inputs[0].index : ''))
+                if (!next.output_device) {
+                  const preferred = devices.virtual_outputs && devices.virtual_outputs.length ? devices.virtual_outputs[0].index : devices.default_output
+                  next.output_device = String(preferred >= 0 ? preferred : '')
+                }
+                return next
+              })
+            }
+          }
+          const status = await fetchJson('/ams/api/vc/status')
+          setVcStatus(status && status.data ? status.data : {})
+          setVcMessage(previous => previous && previous.ok ? previous : null)
+        } catch (error) {
+          setVcMessage({ ok: false, text: 'VC 服务不可用：' + String(error && error.message ? error.message : error) })
+        }
+      }, [])
+
+      React.useEffect(() => {
+        if (activeTab !== 'realtime') return undefined
+        void refreshVc(true)
+        const timer = setInterval(() => { void refreshVc(false) }, 2000)
+        return () => clearInterval(timer)
+      }, [activeTab, refreshVc])
+
+      React.useEffect(() => {
+        if (voices.length === 0) return
+        setVcForm(previous => previous.voice ? previous : Object.assign({}, previous, { voice: voices[0].value }))
+      }, [voices])
+
+      const startVc = async () => {
+        if (!vcForm.voice && vcForm.mode !== 'passthrough') { setVcMessage({ ok: false, text: '请先选择目标音色' }); return }
+        setVcBusy(true); setVcMessage(null)
+        try {
+          const value = await fetchJson('/ams/api/vc/session/start', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, vcForm, { pitch: Number(vcForm.pitch || 0), index_rate: Number(vcForm.index_rate || 0) }))
+          })
+          setVcStatus(value && value.data ? value.data : {})
+          setVcMessage({ ok: true, text: '实时变声已启动' })
+        } catch (error) { setVcMessage({ ok: false, text: '启动失败：' + String(error && error.message ? error.message : error) }) }
+        finally { setVcBusy(false) }
+      }
+
+      const stopVc = async () => {
+        setVcBusy(true); setVcMessage(null)
+        try {
+          const value = await fetchJson('/ams/api/vc/session/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+          setVcStatus(value && value.data ? value.data : {})
+          setVcMessage({ ok: true, text: '实时变声已停止' })
+        } catch (error) { setVcMessage({ ok: false, text: '停止失败：' + String(error && error.message ? error.message : error) }) }
+        finally { setVcBusy(false) }
+      }
       React.useEffect(() => {
         if (ttsModels.length === 0) return
         setForms(previous => {
@@ -456,10 +562,14 @@ window.__ModuleLoader__.load({
       const tools = summary && Array.isArray(summary.tools) ? summary.tools : []
       const jobs = summary && Array.isArray(summary.jobs) ? summary.jobs : []
       const gatewayOk = Boolean(gateway && gateway.ok)
-      const tab = FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0]
-      const form = forms[tab.id]
+      const tab = activeTab === 'realtime' ? VC_TAB : (FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0])
+      const form = activeTab === 'realtime' ? vcForm : forms[tab.id]
 
       const onChange = (key, value) => {
+        if (activeTab === 'realtime') {
+          setVcForm(previous => Object.assign({}, previous, { [key]: value }))
+          return
+        }
         setForms(previous => {
           const next = Object.assign({}, previous)
           next[activeTab] = Object.assign({}, next[activeTab], { [key]: value })
@@ -587,7 +697,7 @@ window.__ModuleLoader__.load({
 
         h('div', { style: cardStyle() },
           h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 } },
-            FEATURE_TABS.map(item => h('button', {
+            ALL_TABS.map(item => h('button', {
               key: item.id,
               style: {
                 background: item.id === activeTab ? COLORS.accent : 'transparent',
@@ -597,10 +707,15 @@ window.__ModuleLoader__.load({
               },
               onClick: () => setActiveTab(item.id)
             }, item.label))),
-          h(FeatureTab, {
-            tab: tab, form: form, summary: summary, message: messages[tab.id],
-            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels }
-          })),
+          activeTab === 'realtime'
+            ? h(VcPanel, {
+                devices: vcDevices, status: vcStatus, form: vcForm, busy: vcBusy, message: vcMessage,
+                voices: voices, onChange: onChange, onRefresh: () => { void refreshVc(true) }, onStart: () => { void startVc() }, onStop: () => { void stopVc() }
+              })
+            : h(FeatureTab, {
+                tab: tab, form: form, summary: summary, message: messages[tab.id],
+                busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels }
+              })),
 
         h('div', { style: cardStyle() },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: 16, marginBottom: 10, flexWrap: 'wrap' } },

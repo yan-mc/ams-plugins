@@ -48,6 +48,66 @@ const DATA_FOLDERS = {
   artifacts: 'artifacts'
 }
 
+const VC_PORT = 7801
+const VC_BASE = 'http://127.0.0.1:' + VC_PORT
+
+async function vcHealth() {
+  try {
+    const response = await fetch(VC_BASE + '/vc/health', { signal: AbortSignal.timeout(700) })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+async function ensureVcService() {
+  if (await vcHealth()) return
+  const home = resolveAmsHome()
+  const runtimePath = join(home, 'config', 'runtime.json')
+  let runtime = null
+  try { runtime = JSON.parse(readFileSync(runtimePath, 'utf8')) } catch { runtime = null }
+  const python = runtime && typeof runtime.rvc_python === 'string' ? runtime.rvc_python : ''
+  const rvcRoot = runtime && typeof runtime.rvc_root === 'string' ? runtime.rvc_root : ''
+  const script = join(home, 'components', 'vc-service', 'ams_vc_service.py')
+  if (!python || !rvcRoot || !existsSync(python) || !existsSync(script)) {
+    throw new Error('VC 服务未安装或 RVC runtime 路径缺失')
+  }
+  const temp = join(home, 'tmp')
+  mkdirSync(temp, { recursive: true })
+  const child = spawn(python, [script, '--port', String(VC_PORT)], {
+    cwd: rvcRoot,
+    env: Object.assign({}, process.env, {
+      AMS_RVC_ROOT: rvcRoot,
+      AMS_HOME: home,
+      TEMP: temp,
+      TMP: temp
+    }),
+    detached: false,
+    stdio: 'ignore',
+    windowsHide: true
+  })
+  child.unref()
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 500))
+    if (await vcHealth()) return
+  }
+  throw new Error('VC 服务启动超时；检查 data/components/vc-service 与 RVC runtime')
+}
+
+async function vcRequest(pathname, method, body) {
+  await ensureVcService()
+  const init = { method, headers: {} }
+  if (method !== 'GET' && method !== 'HEAD') {
+    init.headers['content-type'] = 'application/json'
+    init.body = JSON.stringify(body || {})
+  }
+  const response = await fetch(VC_BASE + pathname, init)
+  const text = await response.text()
+  let payload = null
+  try { payload = text ? JSON.parse(text) : null } catch { payload = { ok: false, raw: text } }
+  return { status: response.status, payload }
+}
+
 function openDataFolder(kind) {
   const folder = DATA_FOLDERS[kind]
   if (!folder) throw new Error('不支持的数据目录类型：' + String(kind))
@@ -645,6 +705,16 @@ export function apply(ctx) {
             sendJson(res, 200, { ok: true, kind, path, message: '已打开数据目录' })
           } catch (error) {
             sendJson(res, 400, { ok: false, error: { code: 'AMS_OPEN_FOLDER_FAILED', message: String(error && error.message ? error.message : error) } })
+          }
+          return
+        }
+        if (joined === 'vc' || joined.startsWith('vc/')) {
+          try {
+            const body = req.method === 'POST' ? await readJsonBody(req) : null
+            const result = await vcRequest('/' + joined, req.method, body)
+            sendJson(res, result.status, result.payload)
+          } catch (error) {
+            sendJson(res, 502, { ok: false, error: { code: 'AMS_VC_ERROR', message: String(error && error.message ? error.message : error) } })
           }
           return
         }
