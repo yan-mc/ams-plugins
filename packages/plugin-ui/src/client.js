@@ -399,11 +399,13 @@ window.__ModuleLoader__.load({
       const inputOptions = inputChoices.map(item => ({ value: String(item.index), label: item.display_name || item.name || ("输入 " + item.index) })).concat(loopbacks.map(item => ({ value: item.value, label: "WASAPI Loopback · " + item.name + (item.is_default ? "（默认输出）" : "") })))
       const outputOptions = outputChoices.map(item => ({ value: String(item.index), label: item.display_name || item.name || ("输出 " + item.index) }))
       const monitorOptions = [{ value: "", label: "不监听" }].concat(outputOptions)
+      const mixOptions = [{ value: "", label: "不叠加" }].concat(loopbacks.map(item => ({ value: item.value, label: "叠加 · " + item.name })))
       const select = { width: "100%", boxSizing: "border-box", padding: "6px 8px", borderRadius: 6, border: "1px solid " + COLORS.border, background: COLORS.bg, color: COLORS.text, fontSize: 13 }
       return h("div", { style: cardStyle() },
         h("div", { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10, lineHeight: 1.6 } }, "实时变声服务会占用麦克风/系统输出和 VB-Cable。先选输入、输出与音源，再点启动；停止后才释放设备。内置 WASAPI Loopback 可直接捕获系统输出；没有时仍可使用“立体声混音”。"),
         devices ? h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "0 16px" } },
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "输入设备（麦克风 / 系统输出）"), h("select", { style: select, value: form.input_device || "", onChange: e => onChange("input_device", e.target.value) }, inputOptions.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "叠加系统声音（可选）"), h("select", { style: select, value: form.mix_loopback || "", onChange: e => onChange("mix_loopback", e.target.value) }, mixOptions.map(item => h("option", { key: item.value || "none", value: item.value }, item.label)))),
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "输出设备（VB-Cable → OBS/会议）"), h("select", { style: select, value: form.output_device || "", onChange: e => onChange("output_device", e.target.value) }, outputOptions.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "监听输出（可选，耳机）"), h("select", { style: select, value: form.monitor_device || "", onChange: e => onChange("monitor_device", e.target.value) }, monitorOptions.map(item => h("option", { key: item.value || "none", value: item.value }, item.label)))),
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "模式"), h("select", { style: select, value: form.mode || "rvc", onChange: e => onChange("mode", e.target.value) }, h("option", { value: "rvc" }, "RVC 变声"), h("option", { value: "passthrough" }, "直通（设备测试）"))),
@@ -449,7 +451,7 @@ window.__ModuleLoader__.load({
       const [connMessage, setConnMessage] = React.useState('')
       const [vcDevices, setVcDevices] = React.useState(null)
       const [vcStatus, setVcStatus] = React.useState({})
-      const [vcForm, setVcForm] = React.useState({ mode: 'rvc', f0method: 'rmvpe', pitch: '0', index_rate: '0', block_time: '0.1', extra_time: '0.25', latency_mode: 'low', monitor_device: '' })
+      const [vcForm, setVcForm] = React.useState({ mode: 'rvc', f0method: 'rmvpe', pitch: '0', index_rate: '0', block_time: '0.1', extra_time: '0.25', latency_mode: 'low', monitor_device: '', mix_loopback: '' })
       const [vcBusy, setVcBusy] = React.useState(false)
       const [vcMessage, setVcMessage] = React.useState(null)
 
