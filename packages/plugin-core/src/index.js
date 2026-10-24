@@ -73,14 +73,35 @@ async function ensureVcService() {
     throw new Error('VC 服务未安装或 RVC runtime 路径缺失')
   }
   const temp = join(home, 'tmp')
+  const cache = join(home, 'cache')
+  const cacheDirs = {
+    torch: join(cache, 'torch'),
+    extensions: join(cache, 'torch-extensions'),
+    hf: join(cache, 'huggingface'),
+    xdg: cache,
+    mpl: join(cache, 'matplotlib'),
+    numba: join(cache, 'numba'),
+    pycache: join(cache, 'pycache')
+  }
   mkdirSync(temp, { recursive: true })
+  for (const dir of Object.values(cacheDirs)) mkdirSync(dir, { recursive: true })
   const child = spawn(python, [script, '--port', String(VC_PORT)], {
     cwd: rvcRoot,
     env: Object.assign({}, process.env, {
       AMS_RVC_ROOT: rvcRoot,
       AMS_HOME: home,
       TEMP: temp,
-      TMP: temp
+      TMP: temp,
+      TMPDIR: temp,
+      TORCH_HOME: cacheDirs.torch,
+      TORCH_EXTENSIONS_DIR: cacheDirs.extensions,
+      HF_HOME: cacheDirs.hf,
+      HUGGINGFACE_HUB_CACHE: join(cacheDirs.hf, 'hub'),
+      TRANSFORMERS_CACHE: join(cacheDirs.hf, 'transformers'),
+      XDG_CACHE_HOME: cacheDirs.xdg,
+      MPLCONFIGDIR: cacheDirs.mpl,
+      NUMBA_CACHE_DIR: cacheDirs.numba,
+      PYTHONPYCACHEPREFIX: cacheDirs.pycache
     }),
     detached: false,
     stdio: 'ignore',

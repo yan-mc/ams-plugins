@@ -456,7 +456,7 @@ window.__ModuleLoader__.load({
           try {
             const value = await fetchJson('/ams/api/voices')
             const list = value && value.data && Array.isArray(value.data.voices) ? value.data.voices : []
-            setVoices(list.map(voice => ({ label: voice.name, value: voice.pth && voice.pth.file ? voice.pth.file : voice.name })))
+            setVoices(list.map(voice => ({ label: voice.name, value: voice.pth && voice.pth.file ? voice.pth.file : voice.name, index: voice.index && voice.index.file ? voice.index.file : '' })))
           } catch (error) { /* voices are optional */ }
           try {
             const value = await fetchJson('/ams/api/tts/models')
@@ -583,7 +583,14 @@ window.__ModuleLoader__.load({
 
       const onChange = (key, value) => {
         if (activeTab === 'realtime') {
-          setVcForm(previous => Object.assign({}, previous, { [key]: value }))
+          setVcForm(previous => {
+            const next = Object.assign({}, previous, { [key]: value })
+            if (key === 'voice') {
+              const selected = voices.find(item => item.value === value)
+              next.index_path = selected && selected.index ? selected.index : ''
+            }
+            return next
+          })
           return
         }
         setForms(previous => {
