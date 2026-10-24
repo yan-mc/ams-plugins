@@ -56,7 +56,13 @@ window.__ModuleLoader__.load({
         fields: [
           { key: 'input_path', label: '输入音频', placeholder: '选择或导入整曲音频', required: true, importable: true },
           { key: 'model', label: '分离模型', kind: 'select', initial: 'scnet_checkpoint_musdb18', required: true, options: ['scnet_checkpoint_musdb18', 'bs_roformer_voc_hyperacev2'] },
-          { key: 'device', label: '设备', kind: 'select', options: ['auto', 'cuda:0', 'cpu'], initial: 'auto' }
+          { key: 'device', label: '设备', kind: 'select', options: ['auto', 'cuda:0', 'cpu'], initial: 'auto' },
+          { key: 'chunk', label: 'chunk 采样点（可选）', kind: 'number', placeholder: '留空使用模型默认' },
+          { key: 'overlap_size', label: 'overlap_size（可选）', kind: 'number', placeholder: '留空使用模型默认' },
+          { key: 'stem_batch_size', label: 'stem_batch_size（可选）', kind: 'number', placeholder: '留空使用模型默认' },
+          { key: 'normalize', label: '输出归一化', kind: 'select', options: ['auto', 'true', 'false'], initial: 'auto' },
+          { key: 'standardize', label: '输入标准化', kind: 'select', options: ['auto', 'true', 'false'], initial: 'auto' },
+          { key: 'stems', label: '输出 stems（逗号分隔）', placeholder: 'vocals,drums,bass,other；留空为模型全部' }
         ]
       },
       {
@@ -68,8 +74,25 @@ window.__ModuleLoader__.load({
           { key: 'input_path', label: '纯人声输入', placeholder: '选择或导入已分离的人声文件', required: true, importable: true },
           { key: 'voice_name', label: '目标音色', kind: 'select', optionsKey: 'voices', placeholder: '请选择目标音色', required: true },
           { key: 'f0_up_key', label: '变调（半音）', kind: 'number', initial: '0' },
+          { key: 'f0_method', label: 'F0 方法', kind: 'select', options: ['rmvpe', 'pm', 'harvest', 'crepe'], initial: 'rmvpe' },
           { key: 'index_rate', label: '索引混合率（0-1）', kind: 'number', initial: '0.75' },
+          { key: 'index_path', label: '指定 index（可选，留空自动同名）', placeholder: 'data/voices/<名称>/<名称>.index', importable: true, accept: '.index' },
+          { key: 'filter_radius', label: 'filter_radius（0-7）', kind: 'number', initial: '3' },
+          { key: 'resample_sr', label: 'resample_sr（0=模型原始）', kind: 'number', initial: '0' },
+          { key: 'rms_mix_rate', label: 'rms_mix_rate（0-1）', kind: 'number', initial: '0.25' },
+          { key: 'protect', label: 'protect（0-0.5）', kind: 'number', initial: '0.33' },
           { key: 'device', label: '设备', kind: 'select', options: ['cuda:0', 'cuda', 'cpu'], initial: 'cuda:0' }
+        ]
+      },
+      {
+        id: 'msvc', label: 'MSVC 工具', jobType: 'convert.msvc',
+        note: '将 .msvc 容器转换为标准 RVC pth；不生成 index，不进入歌曲换源主链。',
+        submitLabel: '开始转换',
+        fields: [
+          { key: 'input_path', label: '.msvc 输入', required: true, importable: true, accept: '.msvc' },
+          { key: 'reference_pth', label: '参考 pth（可选）', importable: true, accept: '.pth' },
+          { key: 'out_dir', label: '输出目录（留空用 artifacts）', placeholder: 'data/artifacts' },
+          { key: 'name', label: '输出名称（可选）', placeholder: '留空按输入名' }
         ]
       },
       {
@@ -85,7 +108,9 @@ window.__ModuleLoader__.load({
     ]
 
     const VC_TAB = { id: 'realtime', label: '实时变声', jobType: null, fields: [], note: '实时变声：独立 VC 服务，麦克风/系统输出 → RVC → VB-Cable。' }
-    const ALL_TABS = [VC_TAB].concat(FEATURE_TABS)
+    const LIBRARY_TAB = { id: 'library', label: '音色库', jobType: null, fields: [], note: '音色库：标签、备注、收藏、index 状态；删除只移动到 data/trash。' }
+    const TTS_BATCH_TAB = { id: 'tts_batch', label: 'TTS 批量', jobType: null, fields: [], note: '同一文本批量合成多个 TTS 音色。' }
+    const ALL_TABS = [VC_TAB, LIBRARY_TAB, TTS_BATCH_TAB].concat(FEATURE_TABS)
 
     function cardStyle(extra) {
       return Object.assign({
@@ -348,12 +373,32 @@ window.__ModuleLoader__.load({
       const onImport = props.onImport
       const onOpenFolder = props.onOpenFolder
       const onPickFile = props.onPickFile
+      const templates = props.templates || []
+      const onSaveTemplate = props.onSaveTemplate
+      const onApplyTemplate = props.onApplyTemplate
+      const onDeleteTemplate = props.onDeleteTemplate
+      const [selectedTemplate, setSelectedTemplate] = React.useState('')
       const dynamicOptions = props.dynamicOptions || {}
       const fields = tab.fields.map(field => field.optionsKey ? Object.assign({}, field, { options: dynamicOptions[field.optionsKey] || [] }) : field)
       const registered = new Set((summary && Array.isArray(summary.jobTypes) ? summary.jobTypes : []).map(item => item.type))
       const available = tab.jobType !== null && registered.has(tab.jobType)
       return h('div', null,
         tab.note ? h('div', { style: { color: available ? COLORS.muted : COLORS.warn, fontSize: 12, marginBottom: 12, lineHeight: 1.6 } }, tab.note) : null,
+        tab.jobType ? h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 } },
+          h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '参数模板'),
+          h('select', { value: selectedTemplate, onChange: event => setSelectedTemplate(event.target.value), style: { minWidth: 180, padding: '4px 6px', borderRadius: 5, border: '1px solid ' + COLORS.border, background: COLORS.bg, color: COLORS.text } },
+            h('option', { value: '' }, '选择模板…'), templates.map(item => h('option', { key: item.kind + ':' + item.name, value: item.name }, item.name))),
+          h('button', { type: 'button', style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 8px', fontSize: 12 }, onClick: () => {
+            const item = templates.find(entry => entry.name === selectedTemplate)
+            if (item) onApplyTemplate(item.params || {})
+          } }, '应用'),
+          h('button', { type: 'button', style: { background: 'transparent', color: COLORS.muted, border: '1px solid ' + COLORS.border, borderRadius: 5, padding: '3px 8px', fontSize: 12 }, onClick: () => {
+            const name = window.prompt('模板名称（1-64 字符）', selectedTemplate || '')
+            if (name) onSaveTemplate(name, form)
+          } }, '保存当前'),
+          h('button', { type: 'button', disabled: !selectedTemplate, style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '3px 8px', fontSize: 12 }, onClick: () => {
+            if (selectedTemplate && window.confirm('把模板移动到 data/trash？')) onDeleteTemplate(selectedTemplate)
+          } }, '删除')) : null,
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0 16px' } },
           fields.map(field => h(FormField, { key: field.key, field: field, value: form[field.key], onChange: onChange, onImport: onImport, onPickFile: onPickFile }))),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 } },
@@ -431,6 +476,62 @@ window.__ModuleLoader__.load({
         message ? h("div", { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginTop: 8 } }, message.text) : null
       )
     }
+    function TtsBatchPanel(props) {
+      const models = props.models || []
+      const busy = props.busy
+      const message = props.message
+      const [text, setText] = React.useState('')
+      const [selected, setSelected] = React.useState([])
+      const toggle = value => setSelected(previous => previous.indexOf(value) >= 0 ? previous.filter(item => item !== value) : previous.concat([value]))
+      return h('div', { style: cardStyle() },
+        h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10 } }, '同一段文本批量合成到多个 TTS 模型；每个模型生成独立任务和产物。'),
+        h('textarea', { value: text, onChange: event => setText(event.target.value), placeholder: '输入文本（最多 2000 字）', style: { width: '100%', minHeight: 100, padding: 8, borderRadius: 6, border: '1px solid ' + COLORS.border, background: COLORS.bg, color: COLORS.text } }),
+        h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 } }, models.map(item => h('label', { key: item.value, style: { color: COLORS.text, fontSize: 12 } }, h('input', { type: 'checkbox', checked: selected.indexOf(item.value) >= 0, onChange: () => toggle(item.value) }), ' ' + item.label))),
+        h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 } },
+          h('button', { type: 'button', disabled: busy || !text.trim() || selected.length === 0, onClick: () => props.onSubmit(text, selected), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 13 } }, busy ? '提交中…' : '批量合成'),
+          h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '已选 ' + selected.length + ' 个模型'),
+          message ? h('span', { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12 } }, message.text) : null)
+      )
+    }
+    function VoiceLibrary(props) {
+      const items = props.items || []
+      const meta = props.meta || {}
+      const busy = props.busy
+      const onChange = props.onChange
+      const onSave = props.onSave
+      const onTrash = props.onTrash
+      const onUse = props.onUse
+      const onOpen = props.onOpen
+      const onPreview = props.onPreview
+      const previews = props.previews || {}
+      return h('div', null,
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 } },
+          h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '共 ' + items.length + ' 个音源；删除只移动到 data/trash，不物理删除。'),
+          h('button', { type: 'button', onClick: onOpen, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px', fontSize: 12 } }, '打开音源目录')),
+        items.length === 0 ? h('div', { style: { color: COLORS.warn, fontSize: 13 } }, '音源目录为空。请用启动器安装或放入 data/voices/<名称>/<名称>.pth。') : null,
+        items.map(item => {
+          const m = meta[item.name] || { tags: [], note: '', favorite: false }
+          const tags = Array.isArray(m.tags) ? m.tags.join(', ') : ''
+          return h('div', { key: item.name, style: { border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 12, marginBottom: 10 } },
+            h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
+              h('b', { style: { fontSize: 14 } }, item.name),
+              h('span', { style: { color: item.status === 'ok' ? COLORS.ok : COLORS.warn, fontSize: 12 } }, item.status),
+              h('span', { style: { color: COLORS.muted, fontSize: 12 } }, item.index ? 'index：有' : 'index：无'),
+              h('label', { style: { color: COLORS.muted, fontSize: 12 } }, h('input', { type: 'checkbox', checked: Boolean(m.favorite), onChange: e => onChange(item.name, 'favorite', e.target.checked) }), ' 收藏'),
+              h('button', { type: 'button', disabled: busy, onClick: () => onUse(item), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '用于歌曲换源'),
+              h('button', { type: 'button', disabled: busy, onClick: () => onPreview(item), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '试听'),
+              h('button', { type: 'button', disabled: busy, onClick: () => onTrash(item.name), style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '移入回收站')),
+            previews[item.name] ? h('audio', { controls: true, src: previews[item.name], style: { width: '100%', marginTop: 6 } }) : null,
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
+              h('span', { style: { color: COLORS.muted, fontSize: 12, width: 38 } }, '标签'),
+              h('input', { value: tags, placeholder: '用逗号分隔', onChange: e => onChange(item.name, 'tags', e.target.value.split(',').map(v => v.trim()).filter(Boolean)), style: { flex: 1, padding: '4px 6px', borderRadius: 5, border: '1px solid ' + COLORS.border, background: COLORS.bg, color: COLORS.text } })),
+            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 } },
+              h('span', { style: { color: COLORS.muted, fontSize: 12, width: 38 } }, '备注'),
+              h('input', { value: m.note || '', placeholder: '备注', onChange: e => onChange(item.name, 'note', e.target.value), style: { flex: 1, padding: '4px 6px', borderRadius: 5, border: '1px solid ' + COLORS.border, background: COLORS.bg, color: COLORS.text } }),
+              h('button', { type: 'button', disabled: busy, onClick: () => onSave(item.name), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 8px', fontSize: 12 } }, '保存元数据')))
+        })
+      )
+    }
     function AmsHomePage() {
       const consoleState = useAmsConsole()
       const [activeTab, setActiveTab] = React.useState('convert')
@@ -443,6 +544,14 @@ window.__ModuleLoader__.load({
       const [messages, setMessages] = React.useState({})
       const [voices, setVoices] = React.useState([])
       const [ttsModels, setTtsModels] = React.useState([])
+      const [templates, setTemplates] = React.useState([])
+      const [libraryVoices, setLibraryVoices] = React.useState([])
+      const [voiceMeta, setVoiceMeta] = React.useState({})
+      const [libraryBusy, setLibraryBusy] = React.useState(false)
+      const [voicePreviews, setVoicePreviews] = React.useState({})
+      const [previewBusy, setPreviewBusy] = React.useState(null)
+      const [ttsBatchBusy, setTtsBatchBusy] = React.useState(false)
+      const [ttsBatchMessage, setTtsBatchMessage] = React.useState(null)
       const [cancelBusy, setCancelBusy] = React.useState(null)
       const [connection, setConnection] = React.useState(null)
       const [connBase, setConnBase] = React.useState('')
@@ -470,13 +579,25 @@ window.__ModuleLoader__.load({
           try {
             const value = await fetchJson('/ams/api/voices')
             const list = value && value.data && Array.isArray(value.data.voices) ? value.data.voices : []
+            setLibraryVoices(list)
             setVoices(list.map(voice => ({ label: voice.name, value: voice.pth && voice.pth.file ? voice.pth.file : voice.name, index: voice.index && voice.index.file ? voice.index.file : '' })))
+            try {
+              const metaValue = await fetchJson('/ams/api/voice-meta')
+              const entries = metaValue && metaValue.data && Array.isArray(metaValue.data.voices) ? metaValue.data.voices : []
+              const map = {}
+              for (const entry of entries) map[entry.name] = entry
+              setVoiceMeta(map)
+            } catch (error) { /* metadata optional */ }
           } catch (error) { /* voices are optional */ }
           try {
             const value = await fetchJson('/ams/api/tts/models')
             const list = value && value.data && Array.isArray(value.data.models) ? value.data.models : []
             setTtsModels(list.map(model => ({ label: model.name, value: model.path })))
           } catch (error) { /* tts models are optional */ }
+          try {
+            const value = await fetchJson('/ams/api/templates')
+            setTemplates(value && value.data && Array.isArray(value.data) ? value.data : [])
+          } catch (error) { /* templates are optional */ }
         })()
       }, [])
 
@@ -593,13 +714,89 @@ window.__ModuleLoader__.load({
         finally { setConnBusy(false) }
       }
 
+      const templateKind = activeTab === 'separate' ? 'pymss' : (activeTab === 'convert' ? 'rvc' : (activeTab === 'tts' ? 'tts' : (activeTab === 'msvc' ? 'msvc' : '')))
+      const activeTemplates = templates.filter(item => item.kind === templateKind)
+      const saveTemplate = async (name, params) => {
+        try {
+          await fetchJson('/ams/api/templates', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: templateKind, name, params }) })
+          const value = await fetchJson('/ams/api/templates')
+          setTemplates(value && value.data && Array.isArray(value.data) ? value.data : [])
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '模板已保存：' + name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '模板保存失败：' + String(error && error.message ? error.message : error) } })) }
+      }
+      const applyTemplate = params => {
+        setForms(previous => Object.assign({}, previous, { [activeTab]: Object.assign({}, previous[activeTab], params) }))
+        setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已应用模板参数' } }))
+      }
+      const deleteTemplate = async name => {
+        try {
+          await fetchJson('/ams/api/templates', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: templateKind, name }) })
+          const value = await fetchJson('/ams/api/templates')
+          setTemplates(value && value.data && Array.isArray(value.data) ? value.data : [])
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '模板已移入 data/trash：' + name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '模板删除失败：' + String(error && error.message ? error.message : error) } })) }
+      }
+      const changeVoiceMeta = (name, key, value) => {
+        setVoiceMeta(previous => Object.assign({}, previous, { [name]: Object.assign({ name, tags: [], note: '', favorite: false }, previous[name], { [key]: value }) }))
+      }
+      const saveVoiceMeta = async name => {
+        setLibraryBusy(true)
+        try {
+          const item = voiceMeta[name] || { name, tags: [], note: '', favorite: false }
+          const value = await fetchJson('/ams/api/voice-meta', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, tags: item.tags || [], note: item.note || '', favorite: Boolean(item.favorite) }) })
+          setVoiceMeta(previous => Object.assign({}, previous, { [name]: value.data }))
+          setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '已保存音色元数据：' + name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '保存失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setLibraryBusy(false) }
+      }
+      const trashVoice = async name => {
+        if (!window.confirm('将音色 ' + name + ' 移入 data/trash？不会直接删除。')) return
+        setLibraryBusy(true)
+        try {
+          await fetchJson('/ams/api/voice-trash', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) })
+          setLibraryVoices(previous => previous.filter(item => item.name !== name))
+          setVoices(previous => previous.filter(item => item.label !== name))
+          setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '已移入 data/trash：' + name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '移动失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setLibraryBusy(false) }
+      }
+      const useLibraryVoice = item => {
+        const value = item.pth && item.pth.file ? item.pth.file : item.name
+        setForms(previous => Object.assign({}, previous, { convert: Object.assign({}, previous.convert, { voice_name: value }) }))
+        setActiveTab('convert')
+        setMessages(previous => Object.assign({}, previous, { convert: { ok: true, text: '已选择音色：' + item.name } }))
+      }
+      const submitTtsBatch = async (text, models) => {
+        if (!text.trim() || models.length === 0) return
+        setTtsBatchBusy(true)
+        const ids = []
+        const errors = []
+        for (const model of models) {
+          const result = await consoleState.submitJob('tts.synthesize', { text: text.trim(), model })
+          if (result.ok) ids.push(result.job.id); else errors.push(model + ': ' + result.message)
+        }
+        setTtsBatchBusy(false)
+        setTtsBatchMessage(ids.length > 0 ? { ok: errors.length === 0, text: '已提交 ' + ids.length + ' 个任务：' + ids.join(', ') + (errors.length ? '；失败：' + errors.join('; ') : '') } : { ok: false, text: errors.join('; ') || '提交失败' })
+      }
+      const previewLibraryVoice = async item => {
+        setPreviewBusy(item.name)
+        try {
+          const value = await fetchJson('/ams/api/voice-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ voice_name: item.pth && item.pth.file ? item.pth.file : item.name }) })
+          const artifacts = value && value.data && Array.isArray(value.data.artifacts) ? value.data.artifacts : []
+          const audio = artifacts.find(entry => String(entry.kind || '').indexOf('audio') >= 0 || String(entry.name || '').toLowerCase().endsWith('.wav')) || artifacts[0]
+          if (!audio || !audio.id) throw new Error('试听任务没有音频产物')
+          setVoicePreviews(previous => Object.assign({}, previous, { [item.name]: '/ams/api/artifact/' + audio.id }))
+          setMessages(previous => Object.assign({}, previous, { library: { ok: true, text: '试听已生成：' + item.name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { library: { ok: false, text: '试听失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setPreviewBusy(null) }
+      }
       const summary = consoleState.summary
       const gateway = summary && summary.gateway ? summary.gateway : null
       const tools = summary && Array.isArray(summary.tools) ? summary.tools : []
       const jobs = summary && Array.isArray(summary.jobs) ? summary.jobs : []
       const gatewayOk = Boolean(gateway && gateway.ok)
-      const tab = activeTab === 'realtime' ? VC_TAB : (FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0])
-      const form = activeTab === 'realtime' ? vcForm : forms[tab.id]
+      const tab = activeTab === 'realtime' ? VC_TAB : (activeTab === 'library' ? LIBRARY_TAB : (activeTab === 'tts_batch' ? TTS_BATCH_TAB : (FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0])))
+      const form = activeTab === 'realtime' ? vcForm : (activeTab === 'library' || activeTab === 'tts_batch' ? {} : forms[tab.id])
 
       const onChange = (key, value) => {
         if (activeTab === 'realtime') {
@@ -754,14 +951,19 @@ window.__ModuleLoader__.load({
               },
               onClick: () => setActiveTab(item.id)
             }, item.label))),
-          activeTab === 'realtime'
+          activeTab === 'tts_batch'
+            ? h(TtsBatchPanel, { models: ttsModels, busy: ttsBatchBusy, message: ttsBatchMessage, onSubmit: (text, models) => { void submitTtsBatch(text, models) } })
+            : activeTab === 'library'
+            ? h(VoiceLibrary, { items: libraryVoices, meta: voiceMeta, busy: libraryBusy || previewBusy !== null, previews: voicePreviews, onChange: changeVoiceMeta, onSave: saveVoiceMeta, onTrash: trashVoice, onUse: useLibraryVoice, onPreview: (item) => { void previewLibraryVoice(item) }, onOpen: () => { void onOpenFolder('rvc_voices') } })
+            : activeTab === 'realtime'
             ? h(VcPanel, {
                 devices: vcDevices, status: vcStatus, form: vcForm, busy: vcBusy, message: vcMessage,
                 voices: voices, onChange: onChange, onRefresh: () => { void refreshVc(true) }, onStart: () => { void startVc() }, onSwitch: () => { void switchVc() }, onStop: () => { void stopVc() }
               })
             : h(FeatureTab, {
                 tab: tab, form: form, summary: summary, message: messages[tab.id],
-                busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels }
+                busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels },
+                templates: activeTemplates, onSaveTemplate: saveTemplate, onApplyTemplate: applyTemplate, onDeleteTemplate: deleteTemplate
               })),
 
         h('div', { style: cardStyle() },

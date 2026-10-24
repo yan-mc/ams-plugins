@@ -11,7 +11,7 @@
  *
  * The Gateway token never leaves this Host process.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, createWriteStream, readdirSync, statSync, renameSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
@@ -40,6 +40,101 @@ function resolveAmsHome() {
     return dirname(dirname(normalized))
   }
   return dirname(dirname(process.execPath))
+}
+
+
+const TEMPLATE_KINDS = new Set(['rvc', 'pymss', 'tts', 'msvc'])
+const SAFE_NAME = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/
+
+function templatesRoot() { return join(resolveAmsHome(), 'config', 'templates') }
+function trashRoot() { return join(resolveAmsHome(), 'trash') }
+
+function safeVoiceName(name) {
+  const value = String(name || '').trim()
+  if (!SAFE_NAME.test(value) || value === '.' || value === '..') throw new Error('非法音色名称')
+  return value
+}
+
+function templatePath(kind, name) {
+  if (!TEMPLATE_KINDS.has(kind)) throw new Error('未知模板类型')
+  if (!SAFE_NAME.test(name)) throw new Error('非法模板名称')
+  return join(templatesRoot(), kind, name + '.json')
+}
+
+function readVoiceMetadata(name) {
+  const file = join(resolveAmsHome(), 'voices', name, 'voice.json')
+  if (!existsSync(file)) return { name, tags: [], note: '', favorite: false }
+  try {
+    const data = JSON.parse(readFileSync(file, 'utf8'))
+    return Object.assign({ name }, data, { tags: Array.isArray(data.tags) ? data.tags : [] })
+  } catch { return { name, tags: [], note: '', favorite: false } }
+}
+
+function listTemplates() {
+  const result = []
+  for (const kind of TEMPLATE_KINDS) {
+    const dir = join(templatesRoot(), kind)
+    if (!existsSync(dir)) continue
+    for (const entry of readdirSync(dir)) {
+      if (!entry.endsWith('.json')) continue
+      try {
+        const data = JSON.parse(readFileSync(join(dir, entry), 'utf8'))
+        result.push({ kind, name: entry.slice(0, -5), params: data.params || data, saved_at: data.saved_at || null })
+      } catch { /* skip invalid */ }
+    }
+  }
+  return result
+}
+
+function saveTemplate(kind, name, params) {
+  const file = templatePath(kind, name)
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = file + '.tmp'
+  writeFileSync(tmp, JSON.stringify({ schema: 'ams.param-template/1', kind, name, saved_at: new Date().toISOString(), params }, null, 2))
+  renameSync(tmp, file)
+  return { kind, name }
+}
+
+function moveToTrash(source, area) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const dest = join(trashRoot(), area, stamp + '-' + basename(source))
+  mkdirSync(dirname(dest), { recursive: true })
+  renameSync(source, dest)
+  return dest
+}
+
+
+async function previewVoice(body) {
+  const name = String(body.voice_name || '').trim()
+  if (!name) throw new Error('缺少 voice_name')
+  const sample = join(resolveAmsHome(), 'assets', 'preview_voice.wav')
+  if (!existsSync(sample)) throw new Error('缺少试听样本 data/assets/preview_voice.wav')
+  const job = await gatewaySubmit('convert.rvc', {
+    input_path: sample,
+    voice_name: name,
+    f0_up_key: 0,
+    f0_method: 'rmvpe',
+    index_rate: 0.5,
+    index_path: '',
+    filter_radius: 3,
+    resample_sr: 0,
+    rms_mix_rate: 0.25,
+    protect: 0.33,
+    device: 'cuda:0'
+  })
+  const jobId = String(job && job.id ? job.id : '')
+  if (!jobId) throw new Error('Gateway 未返回试听任务 id')
+  for (let i = 0; i < 90; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    const status = await gatewayJob(jobId)
+    if (status.status === 'failed' || status.status === 'cancelled') throw new Error('试听任务失败：' + String(status.error && status.error.message ? status.error.message : status.status))
+    if (status.status === 'succeeded') {
+      const list = await gatewayArtifacts(jobId)
+      const artifacts = Array.isArray(list.data) ? list.data : (Array.isArray(list) ? list : [])
+      return { job_id: jobId, artifacts }
+    }
+  }
+  throw new Error('试听任务超时')
 }
 
 const DATA_FOLDERS = {
@@ -245,6 +340,7 @@ function gatewayJobs(limit) { return gatewayRequest('/jobs?limit=' + String(limi
 function gatewayVoices() { return gatewayRequest('/voices') }
 function gatewayTtsModels() { return gatewayRequest('/tts/models') }
 function gatewayJob(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId)) }
+function gatewayArtifacts(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId) + '/artifacts') }
 function gatewayCancel(jobId) {
   return gatewayRequest('/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' })
 }
@@ -716,6 +812,95 @@ export function apply(ctx) {
         }
         if (joined === 'summary' && req.method === 'GET') { sendJson(res, 200, await summaryPayload(auth)); return }
         if (joined === 'voices' && req.method === 'GET') { sendJson(res, 200, await gatewayVoices()); return }
+        if (joined === 'voice-preview' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const preview = await previewVoice(body)
+            sendJson(res, 200, { ok: true, data: preview })
+          } catch (error) { sendJson(res, 500, { ok: false, error: { code: 'VOICE_PREVIEW_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined.startsWith('artifact/') && req.method === 'GET') {
+          try {
+            const id = joined.slice('artifact/'.length)
+            if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('非法 artifact id')
+            const info = readGatewayInfo()
+            const upstream = await fetch(info.base + '/artifacts/' + encodeURIComponent(id) + '/download', { headers: { authorization: 'Bearer ' + info.token } })
+            if (!upstream.ok) throw new Error('artifact HTTP ' + upstream.status)
+            const buffer = Buffer.from(await upstream.arrayBuffer())
+            res.statusCode = 200
+            res.setHeader('content-type', 'audio/wav')
+            res.setHeader('content-length', String(buffer.length))
+            res.end(buffer)
+          } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'ARTIFACT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'templates' && req.method === 'GET') { sendJson(res, 200, { ok: true, data: listTemplates() }); return }
+        if (joined === 'templates' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const saved = saveTemplate(String(body.kind || ''), String(body.name || ''), body.params || {})
+            sendJson(res, 200, { ok: true, data: saved })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'TEMPLATE_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'templates' && req.method === 'DELETE') {
+          try {
+            const body = await readJsonBody(req)
+            const file = templatePath(String(body.kind || ''), String(body.name || ''))
+            if (!existsSync(file)) throw new Error('模板不存在')
+            const dest = moveToTrash(file, 'templates')
+            sendJson(res, 200, { ok: true, data: { path: dest } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'TEMPLATE_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'voice-meta' && req.method === 'GET') {
+          const root = join(resolveAmsHome(), 'voices')
+          const voices = []
+          try {
+            for (const entry of readdirSync(root)) {
+              if (entry.startsWith('.')) continue
+              const full = join(root, entry)
+              if (!statSync(full).isDirectory()) continue
+              voices.push(readVoiceMetadata(entry))
+            }
+          } catch { /* no voices */ }
+          sendJson(res, 200, { ok: true, data: { voices } })
+          return
+        }
+        if (joined === 'voice-meta' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const name = safeVoiceName(body.name)
+            const dir = join(resolveAmsHome(), 'voices', name)
+            if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new Error('音色不存在')
+            const previous = readVoiceMetadata(name)
+            const next = Object.assign({}, previous, {
+              name,
+              tags: Array.isArray(body.tags) ? body.tags.map(item => String(item).trim()).filter(Boolean).slice(0, 20) : previous.tags,
+              note: typeof body.note === 'string' ? body.note.slice(0, 2000) : previous.note,
+              favorite: typeof body.favorite === 'boolean' ? body.favorite : previous.favorite,
+              updated_at: new Date().toISOString()
+            })
+            const file = join(dir, 'voice.json')
+            const tmp = file + '.tmp'
+            writeFileSync(tmp, JSON.stringify(next, null, 2))
+            renameSync(tmp, file)
+            sendJson(res, 200, { ok: true, data: next })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_META_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'voice-trash' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const name = safeVoiceName(body.name)
+            const source = join(resolveAmsHome(), 'voices', name)
+            if (!existsSync(source)) throw new Error('音色不存在')
+            const dest = moveToTrash(source, 'voices')
+            sendJson(res, 200, { ok: true, data: { path: dest } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_TRASH_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
         if (joined === 'tts/models' && req.method === 'GET') { sendJson(res, 200, await gatewayTtsModels()); return }
         if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
         if (joined === 'open-folder' && req.method === 'POST') {
