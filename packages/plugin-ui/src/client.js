@@ -42,11 +42,28 @@ window.__ModuleLoader__.load({
         note: '训练音色模型（RVC 管线）。参数按协议透传给 Gateway；若当前 Gateway 未注册 train.rvc，提交会在页面显示错误原因。',
         submitLabel: '开始炼制',
         fields: [
-          { key: 'dataset_dir', label: '训练数据集目录', placeholder: 'F:/AMS/dataset/我的音色', importable: true },
-          { key: 'model', label: '模型名', placeholder: '我的音色' },
+          { key: 'dataset_dir', label: '训练数据集目录', placeholder: 'data/datasets/<名称>/sources 或 processed', importable: true },
+          { key: 'model_name', label: '模型名', placeholder: '我的音色' },
+          { key: 'version', label: '模型版本', kind: 'select', options: ['v2', 'v1'], initial: 'v2' },
+          { key: 'sample_rate', label: '采样率', kind: 'select', options: ['48k', '32k', '40k'], initial: '48k' },
+          { key: 'if_f0', label: 'F0 引导', kind: 'select', options: ['1', '0'], initial: '1' },
+          { key: 'f0_method', label: 'F0 提取方法', kind: 'select', options: ['rmvpe', 'harvest', 'pm'], initial: 'rmvpe' },
           { key: 'epochs', label: 'Epochs', kind: 'number', initial: '100' },
-          { key: 'batch_size', label: 'Batch size', kind: 'number', initial: '8' },
-          { key: 'sample_rate', label: '采样率', kind: 'number', initial: '40000' }
+          { key: 'batch_size', label: 'Batch size', kind: 'number', initial: '4' },
+          { key: 'save_every', label: '每 N epoch 保存', kind: 'number', initial: '10' },
+          { key: 'gpu', label: 'GPU', kind: 'text', initial: '0' }
+        ]
+      },
+      {
+        id: 'dataset', label: '数据集工作室', jobType: 'dataset.prepare',
+        note: '导入 wav 或目录，统一 48k 单声道并切成 3–10 秒片段；产物在 data/datasets/<名称>/processed。',
+        submitLabel: '准备数据集',
+        fields: [
+          { key: 'source_path', label: '源音频/目录', required: true, importable: true },
+          { key: 'dataset_name', label: '数据集名称', placeholder: '我的音色数据集' },
+          { key: 'target_sr', label: '目标采样率', kind: 'select', options: ['48000', '40000', '32000'], initial: '48000' },
+          { key: 'min_sec', label: '最短片段（秒）', kind: 'number', initial: '3' },
+          { key: 'max_sec', label: '最长片段（秒）', kind: 'number', initial: '10' }
         ]
       },
       {
