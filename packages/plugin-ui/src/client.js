@@ -393,11 +393,12 @@ window.__ModuleLoader__.load({
       const inputs = devices && Array.isArray(devices.inputs) ? devices.inputs : []
       const outputs = devices && Array.isArray(devices.outputs) ? devices.outputs : []
       const virtual = devices && Array.isArray(devices.virtual_outputs) ? devices.virtual_outputs : []
-      const inputOptions = inputs.map(item => ({ value: String(item.index), label: String(item.index) + " · " + item.name + (item.kind === "loopback" ? "（系统输出/回环）" : "") }))
+      const loopbacks = devices && Array.isArray(devices.wasapi_loopbacks) ? devices.wasapi_loopbacks : []
+      const inputOptions = inputs.map(item => ({ value: String(item.index), label: String(item.index) + " · " + item.name + (item.kind === "loopback" ? "（系统输出/回环）" : "") })).concat(loopbacks.map(item => ({ value: item.value, label: "WASAPI Loopback · " + item.name + (item.is_default ? "（默认输出）" : "") })))
       const outputOptions = outputs.map(item => ({ value: String(item.index), label: String(item.index) + " · " + item.name + (item.kind === "virtual" ? "（VB-Cable）" : "") }))
       const select = { width: "100%", boxSizing: "border-box", padding: "6px 8px", borderRadius: 6, border: "1px solid " + COLORS.border, background: COLORS.bg, color: COLORS.text, fontSize: 13 }
       return h("div", { style: cardStyle() },
-        h("div", { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10, lineHeight: 1.6 } }, "实时变声服务会占用麦克风/系统输出和 VB-Cable。先选输入、输出与音源，再点启动；停止后才释放设备。系统输出需要可用的“立体声混音/回环”输入设备。"),
+        h("div", { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10, lineHeight: 1.6 } }, "实时变声服务会占用麦克风/系统输出和 VB-Cable。先选输入、输出与音源，再点启动；停止后才释放设备。内置 WASAPI Loopback 可直接捕获系统输出；没有时仍可使用“立体声混音”。"),
         devices ? h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "0 16px" } },
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "输入设备（麦克风 / 系统输出）"), h("select", { style: select, value: form.input_device || "", onChange: e => onChange("input_device", e.target.value) }, inputOptions.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "输出设备（VB-Cable 输入）"), h("select", { style: select, value: form.output_device || "", onChange: e => onChange("output_device", e.target.value) }, outputOptions.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
