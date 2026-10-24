@@ -405,14 +405,15 @@ window.__ModuleLoader__.load({
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "目标音色"), h("select", { style: select, value: form.voice || "", onChange: e => onChange("voice", e.target.value) }, h("option", { value: "" }, "请选择音色…"), voices.map(item => h("option", { key: item.value, value: item.value }, item.label)))),
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "变调（半音）"), h("input", { type: "number", style: select, value: form.pitch === undefined ? "0" : form.pitch, onChange: e => onChange("pitch", e.target.value) })),
           h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "索引混合率"), h("input", { type: "number", min: 0, max: 1, step: 0.05, style: select, value: form.index_rate === undefined ? "0" : form.index_rate, onChange: e => onChange("index_rate", e.target.value) })),
-          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "F0 方法"), h("select", { style: select, value: form.f0method || "rmvpe", onChange: e => onChange("f0method", e.target.value) }, ["rmvpe", "pm", "harvest", "crepe"].map(item => h("option", { key: item, value: item }, item)))))
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "F0 方法"), h("select", { style: select, value: form.f0method || "rmvpe", onChange: e => onChange("f0method", e.target.value) }, ["rmvpe", "pm", "harvest", "crepe"].map(item => h("option", { key: item, value: item }, item)))),
+          h("label", { style: { display: "block", marginBottom: 10 } }, h("span", { style: { display: "block", color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, "延迟模式"), h("select", { style: select, value: form.latency_mode || "low", onChange: e => onChange("latency_mode", e.target.value) }, h("option", { value: "low" }, "低延迟（block 100ms / buffer 250ms）"), h("option", { value: "stable" }, "稳定（block 250ms / buffer 1000ms）"))))
           : h("div", { style: { color: COLORS.warn, fontSize: 12 } }, "正在检测设备…"),
         h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 } },
           h("button", { type: "button", disabled: busy, onClick: onRefresh, style: { background: "transparent", color: COLORS.accent, border: "1px solid " + COLORS.accent, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "刷新设备"),
           h("button", { type: "button", disabled: busy || status.running, onClick: onStart, style: { background: COLORS.accent, color: "#fff", border: "1px solid " + COLORS.accent, borderRadius: 5, padding: "5px 12px", fontSize: 12 } }, status.running ? "运行中" : "启动实时变声"),
           h("button", { type: "button", disabled: busy || !status.running, onClick: onSwitch, style: { background: "transparent", color: COLORS.warn, border: "1px solid " + COLORS.warn, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "切换音色"),
           h("button", { type: "button", disabled: busy || !status.running, onClick: onStop, style: { background: "transparent", color: COLORS.err, border: "1px solid " + COLORS.err, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "停止")),
-        status.running ? h("div", { style: { color: COLORS.ok, fontSize: 12, marginTop: 8 } }, "运行中 · " + (status.mode || "") + " · " + String(status.samplerate || "") + " Hz · frames=" + String(status.frames || 0)) : null,
+        status.running ? h("div", { style: { color: COLORS.ok, fontSize: 12, marginTop: 8 } }, "运行中 · " + (status.mode || "") + " · " + String(status.samplerate || "") + " Hz · frames=" + String(status.frames || 0) + (status.stats ? " · infer=" + String(status.stats.infer_ms) + "ms · est=" + String(status.stats.estimated_latency_ms) + "ms" : "")) : null,
         status.last_error ? h("div", { style: { color: COLORS.err, fontSize: 12, marginTop: 8 } }, "错误：" + status.last_error) : null,
         message ? h("div", { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginTop: 8 } }, message.text) : null
       )
@@ -437,7 +438,7 @@ window.__ModuleLoader__.load({
       const [connMessage, setConnMessage] = React.useState('')
       const [vcDevices, setVcDevices] = React.useState(null)
       const [vcStatus, setVcStatus] = React.useState({})
-      const [vcForm, setVcForm] = React.useState({ mode: 'rvc', f0method: 'rmvpe', pitch: '0', index_rate: '0' })
+      const [vcForm, setVcForm] = React.useState({ mode: 'rvc', f0method: 'rmvpe', pitch: '0', index_rate: '0', block_time: '0.1', extra_time: '0.25', latency_mode: 'low' })
       const [vcBusy, setVcBusy] = React.useState(false)
       const [vcMessage, setVcMessage] = React.useState(null)
 
@@ -588,6 +589,10 @@ window.__ModuleLoader__.load({
             if (key === 'voice') {
               const selected = voices.find(item => item.value === value)
               next.index_path = selected && selected.index ? selected.index : ''
+            }
+            if (key === 'latency_mode') {
+              next.block_time = value === 'stable' ? '0.25' : '0.1'
+              next.extra_time = value === 'stable' ? '1.0' : '0.25'
             }
             return next
           })
