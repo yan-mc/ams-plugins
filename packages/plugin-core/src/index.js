@@ -11,8 +11,9 @@
  *
  * The Gateway token never leaves this Host process.
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { dirname, join, resolve, sep } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 
@@ -39,6 +40,26 @@ function resolveAmsHome() {
     return dirname(dirname(normalized))
   }
   return dirname(dirname(process.execPath))
+}
+
+const DATA_FOLDERS = {
+  rvc_voices: 'voices',
+  tts_voices: 'tts_voices',
+  artifacts: 'artifacts'
+}
+
+function openDataFolder(kind) {
+  const folder = DATA_FOLDERS[kind]
+  if (!folder) throw new Error('不支持的数据目录类型：' + String(kind))
+  const root = resolve(resolveAmsHome())
+  const path = resolve(root, folder)
+  if (path !== root && !path.startsWith(root + sep)) throw new Error('目标目录不在 AMS data 内')
+  mkdirSync(path, { recursive: true })
+  if (!existsSync(path)) throw new Error('目录创建失败：' + String(kind))
+  if (process.platform !== 'win32') throw new Error('当前平台不支持打开目录')
+  const child = spawn('explorer.exe', [path], { detached: true, stdio: 'ignore', windowsHide: true })
+  child.unref()
+  return path
 }
 
 function connectionPath() {
@@ -595,6 +616,17 @@ export function apply(ctx) {
         if (joined === 'voices' && req.method === 'GET') { sendJson(res, 200, await gatewayVoices()); return }
         if (joined === 'tts/models' && req.method === 'GET') { sendJson(res, 200, await gatewayTtsModels()); return }
         if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
+        if (joined === 'open-folder' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const kind = body && typeof body.kind === 'string' ? body.kind : ''
+            openDataFolder(kind)
+            sendJson(res, 200, { ok: true, kind, message: '已打开数据目录' })
+          } catch (error) {
+            sendJson(res, 400, { ok: false, error: { code: 'AMS_OPEN_FOLDER_FAILED', message: String(error && error.message ? error.message : error) } })
+          }
+          return
+        }
         if (joined === 'jobs' && req.method === 'GET') { sendJson(res, 200, await gatewayJobs(50)); return }
         if (joined === 'projects/import' && req.method === 'POST') {
           const body = await readJsonBody(req)

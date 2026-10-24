@@ -51,43 +51,34 @@ window.__ModuleLoader__.load({
       },
       {
         id: 'separate', label: '人声分离', jobType: 'separate.pymss',
-        note: 'pymss 人声/伴奏分离（GPU 串行队列）。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
+        note: 'pymss 人声/伴奏分离（GPU 串行队列）。输入整曲，输出 vocals/drums/bass/other stems。',
         submitLabel: '开始分离',
         fields: [
-          { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/song.wav', importable: true },
-          { key: 'model', label: '分离模型', kind: 'select', options: ['scnet_checkpoint_musdb18', 'bs_roformer_voc_hyperacev2'] },
+          { key: 'input_path', label: '输入音频', placeholder: '选择或导入整曲音频', required: true, importable: true },
+          { key: 'model', label: '分离模型', kind: 'select', initial: 'scnet_checkpoint_musdb18', required: true, options: ['scnet_checkpoint_musdb18', 'bs_roformer_voc_hyperacev2'] },
           { key: 'device', label: '设备', kind: 'select', options: ['auto', 'cuda:0', 'cpu'], initial: 'auto' }
         ]
       },
       {
-        id: 'convert', label: '变声器', jobType: 'convert.rvc',
-        note: 'RVC 变声：输入音频 + 目标音色模型。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
-        submitLabel: '开始变声',
+        id: 'convert', label: '歌曲换源', jobType: 'convert.rvc',
+        folder: { kind: 'rvc_voices', label: '打开变声音源目录' },
+        note: '输入已分离好的纯人声，输出目标音色的纯人声。不混伴奏，不使用 MSVC。',
+        submitLabel: '开始换源',
         fields: [
-          { key: 'input_path', label: '输入音频', placeholder: 'F:/AMS/input/voice.wav', importable: true },
-          { key: 'voice_name', label: '目标音色', kind: 'select', optionsKey: 'voices', placeholder: '曼波' },
+          { key: 'input_path', label: '纯人声输入', placeholder: '选择或导入已分离的人声文件', required: true, importable: true },
+          { key: 'voice_name', label: '目标音色', kind: 'select', optionsKey: 'voices', placeholder: '请选择目标音色', required: true },
           { key: 'f0_up_key', label: '变调（半音）', kind: 'number', initial: '0' },
           { key: 'index_rate', label: '索引混合率（0-1）', kind: 'number', initial: '0.75' },
           { key: 'device', label: '设备', kind: 'select', options: ['cuda:0', 'cuda', 'cpu'], initial: 'cuda:0' }
         ]
       },
       {
-        id: 'remix', label: '歌曲换源', jobType: 'convert.msvc',
-        note: 'MSVC 歌曲换源：用已炼制模型替换歌曲音色。参数按协议透传给 Gateway；未注册时提交会在页面显示错误原因。',
-        submitLabel: '开始换源',
-        fields: [
-          { key: 'input_path', label: '输入 .msvc 文件', placeholder: 'F:/AMS/input/model.msvc', importable: true },
-          { key: 'name', label: '模型名（可选）', placeholder: '我的音色' },
-          { key: 'reference_pth', label: '参考 .pth（可选）', placeholder: 'F:/AMS/input/reference.pth', importable: true },
-          { key: 'out_dir', label: '输出目录（data 内）', placeholder: '留空自动 data/artifacts' }
-        ]
-      },
-      {
         id: 'tts', label: 'TTS 语音合成', jobType: 'tts.synthesize',
-        note: 'Piper 离线 TTS：文本提交给 Gateway，产物写入 data/artifacts。模型/音色可留空使用默认 zh_CN-huayan-medium。',
+        folder: { kind: 'tts_voices', label: '打开 TTS 音源目录' },
+        note: 'Piper 离线 TTS：文本提交给 Gateway，产物写入 data/artifacts。TTS 音源与变声音源分开，可放入 data/tts_voices。',
         submitLabel: '开始合成',
         fields: [
-          { key: 'text', label: '要合成的文本', kind: 'textarea', placeholder: '输入文本（最多 2000 字）' },
+          { key: 'text', label: '要合成的文本', kind: 'textarea', required: true, placeholder: '输入文本（最多 2000 字）' },
           { key: 'model', label: 'TTS 模型', kind: 'select', optionsKey: 'ttsModels', placeholder: '留空使用默认模型' }
         ]
       }
@@ -326,12 +317,14 @@ window.__ModuleLoader__.load({
       const onImport = props.onImport
       const common = { style: fieldInputStyle(), value: value, onChange: event => onChange(field.key, event.target.value) }
       const control = field.kind === 'select'
-        ? h('select', common, (field.options || []).map(option => typeof option === 'string' ? h('option', { key: option, value: option }, option) : h('option', { key: option.value, value: option.value }, option.label)))
+        ? h('select', common,
+            h('option', { key: '__empty', value: '' }, field.placeholder || '请选择…'),
+            (field.options || []).map(option => typeof option === 'string' ? h('option', { key: option, value: option }, option) : h('option', { key: option.value, value: option.value }, option.label)))
         : field.kind === 'textarea'
           ? h('textarea', Object.assign({ rows: 5, placeholder: field.placeholder || '' }, common))
           : h('input', Object.assign({ type: field.kind === 'number' ? 'number' : 'text', placeholder: field.placeholder || '' }, common))
       return h('label', { style: { display: 'block', marginBottom: 10 } },
-        h('span', { style: { display: 'block', color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, field.label),
+        h('span', { style: { display: 'block', color: COLORS.muted, fontSize: 12, marginBottom: 4 } }, field.label + (field.required ? ' *' : '')),
         control,
         field.importable
           ? h('button', { type: 'button', disabled: !value, onClick: () => { void onImport(field.key, value) }, style: { marginTop: 5, background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 9px', fontSize: 12, cursor: value ? 'pointer' : 'not-allowed' } }, '导入到 data')
@@ -347,6 +340,7 @@ window.__ModuleLoader__.load({
       const onChange = props.onChange
       const onSubmit = props.onSubmit
       const onImport = props.onImport
+      const onOpenFolder = props.onOpenFolder
       const dynamicOptions = props.dynamicOptions || {}
       const fields = tab.fields.map(field => field.optionsKey ? Object.assign({}, field, { options: dynamicOptions[field.optionsKey] || [] }) : field)
       const registered = new Set((summary && Array.isArray(summary.jobTypes) ? summary.jobTypes : []).map(item => item.type))
@@ -365,6 +359,11 @@ window.__ModuleLoader__.load({
             disabled: tab.jobType === null || busy,
             onClick: onSubmit
           }, busy ? '提交中…' : tab.submitLabel),
+          tab.folder ? h('button', {
+            type: 'button',
+            onClick: () => { void onOpenFolder(tab.folder.kind) },
+            style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }
+          }, tab.folder.label) : null,
           tab.jobType !== null && !available
             ? h('span', { style: { color: COLORS.warn, fontSize: 12 } }, 'Gateway 当前未注册 ' + tab.jobType + '（可用：' + (summary && Array.isArray(summary.jobTypes) ? summary.jobTypes.map(item => item.type).join(', ') : '未知') + '）')
             : null,
@@ -373,7 +372,7 @@ window.__ModuleLoader__.load({
 
     function AmsHomePage() {
       const consoleState = useAmsConsole()
-      const [activeTab, setActiveTab] = React.useState('train')
+      const [activeTab, setActiveTab] = React.useState('convert')
       const [forms, setForms] = React.useState(() => {
         const value = {}
         for (const tab of FEATURE_TABS) value[tab.id] = initialForm(tab)
@@ -414,6 +413,22 @@ window.__ModuleLoader__.load({
           } catch (error) { /* tts models are optional */ }
         })()
       }, [])
+
+      React.useEffect(() => {
+        if (voices.length === 0) return
+        setForms(previous => {
+          if (previous.convert && previous.convert.voice_name) return previous
+          return Object.assign({}, previous, { convert: Object.assign({}, previous.convert, { voice_name: voices[0].value }) })
+        })
+      }, [voices])
+
+      React.useEffect(() => {
+        if (ttsModels.length === 0) return
+        setForms(previous => {
+          if (previous.tts && previous.tts.model) return previous
+          return Object.assign({}, previous, { tts: Object.assign({}, previous.tts, { model: ttsModels[0].value }) })
+        })
+      }, [ttsModels])
 
       const saveConnection = async () => {
         setConnBusy(true)
@@ -465,8 +480,26 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const onOpenFolder = async kind => {
+        try {
+          await fetchJson('/ams/api/open-folder', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ kind })
+          })
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: true, text: '已打开数据目录' } }))
+        } catch (error) {
+          setMessages(previous => Object.assign({}, previous, { [activeTab]: { ok: false, text: '打开目录失败：' + String(error && error.message ? error.message : error) } }))
+        }
+      }
+
       const onSubmit = async () => {
         if (tab.jobType === null || busyTab !== null) return
+        const missing = tab.fields.find(field => field.required && (form[field.key] === undefined || form[field.key] === null || String(form[field.key]).trim() === ''))
+        if (missing) {
+          setMessages(previous => Object.assign({}, previous, { [tab.id]: { ok: false, text: '请先填写：' + missing.label } }))
+          return
+        }
         setBusyTab(tab.id)
         const params = {}
         for (const field of tab.fields) {
@@ -530,7 +563,7 @@ window.__ModuleLoader__.load({
             }, item.label))),
           h(FeatureTab, {
             tab: tab, form: form, summary: summary, message: messages[tab.id],
-            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, dynamicOptions: { voices: voices, ttsModels: ttsModels }
+            busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, dynamicOptions: { voices: voices, ttsModels: ttsModels }
           })),
 
         h('div', { style: cardStyle() },
@@ -549,7 +582,11 @@ window.__ModuleLoader__.load({
             h('button', {
               style: { background: 'transparent', color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: 'pointer' },
               onClick: () => { void consoleState.refresh() }
-            }, '刷新列表')),
+            }, '刷新列表'),
+            h('button', {
+              style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 6, padding: '6px 14px', fontSize: 13, cursor: 'pointer' },
+              onClick: () => { void onOpenFolder('artifacts') }
+            }, '打开产物目录')),
           messages.jobs ? h('div', { style: { color: messages.jobs.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginBottom: 8 } }, messages.jobs.text) : null,
           jobs.length === 0
             ? h('div', { style: { color: COLORS.muted, fontSize: 13 } }, '暂无任务。选择上方功能页提交，或在页面右上角点 ping 自检。')
