@@ -389,6 +389,7 @@ window.__ModuleLoader__.load({
       const onRefresh = props.onRefresh
       const onStart = props.onStart
       const onStop = props.onStop
+      const onSwitch = props.onSwitch
       const inputs = devices && Array.isArray(devices.inputs) ? devices.inputs : []
       const outputs = devices && Array.isArray(devices.outputs) ? devices.outputs : []
       const virtual = devices && Array.isArray(devices.virtual_outputs) ? devices.virtual_outputs : []
@@ -409,6 +410,7 @@ window.__ModuleLoader__.load({
         h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 } },
           h("button", { type: "button", disabled: busy, onClick: onRefresh, style: { background: "transparent", color: COLORS.accent, border: "1px solid " + COLORS.accent, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "刷新设备"),
           h("button", { type: "button", disabled: busy || status.running, onClick: onStart, style: { background: COLORS.accent, color: "#fff", border: "1px solid " + COLORS.accent, borderRadius: 5, padding: "5px 12px", fontSize: 12 } }, status.running ? "运行中" : "启动实时变声"),
+          h("button", { type: "button", disabled: busy || !status.running, onClick: onSwitch, style: { background: "transparent", color: COLORS.warn, border: "1px solid " + COLORS.warn, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "切换音色"),
           h("button", { type: "button", disabled: busy || !status.running, onClick: onStop, style: { background: "transparent", color: COLORS.err, border: "1px solid " + COLORS.err, borderRadius: 5, padding: "5px 10px", fontSize: 12 } }, "停止")),
         status.running ? h("div", { style: { color: COLORS.ok, fontSize: 12, marginTop: 8 } }, "运行中 · " + (status.mode || "") + " · " + String(status.samplerate || "") + " Hz · frames=" + String(status.frames || 0)) : null,
         status.last_error ? h("div", { style: { color: COLORS.err, fontSize: 12, marginTop: 8 } }, "错误：" + status.last_error) : null,
@@ -521,6 +523,20 @@ window.__ModuleLoader__.load({
           setVcStatus(value && value.data ? value.data : {})
           setVcMessage({ ok: true, text: '实时变声已启动' })
         } catch (error) { setVcMessage({ ok: false, text: '启动失败：' + String(error && error.message ? error.message : error) }) }
+        finally { setVcBusy(false) }
+      }
+
+      const switchVc = async () => {
+        if (!vcForm.voice) { setVcMessage({ ok: false, text: '请先选择目标音色' }); return }
+        setVcBusy(true); setVcMessage(null)
+        try {
+          const value = await fetchJson('/ams/api/vc/session/switch-voice', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(Object.assign({}, vcForm, { pitch: Number(vcForm.pitch || 0), index_rate: Number(vcForm.index_rate || 0) }))
+          })
+          setVcStatus(value && value.data ? value.data : {})
+          setVcMessage({ ok: true, text: '音色已切换（服务会短暂重启音频流）' })
+        } catch (error) { setVcMessage({ ok: false, text: '切换失败：' + String(error && error.message ? error.message : error) }) }
         finally { setVcBusy(false) }
       }
 
@@ -710,7 +726,7 @@ window.__ModuleLoader__.load({
           activeTab === 'realtime'
             ? h(VcPanel, {
                 devices: vcDevices, status: vcStatus, form: vcForm, busy: vcBusy, message: vcMessage,
-                voices: voices, onChange: onChange, onRefresh: () => { void refreshVc(true) }, onStart: () => { void startVc() }, onStop: () => { void stopVc() }
+                voices: voices, onChange: onChange, onRefresh: () => { void refreshVc(true) }, onStart: () => { void startVc() }, onSwitch: () => { void switchVc() }, onStop: () => { void stopVc() }
               })
             : h(FeatureTab, {
                 tab: tab, form: form, summary: summary, message: messages[tab.id],
