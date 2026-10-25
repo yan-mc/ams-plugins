@@ -79,6 +79,11 @@ window.__ModuleLoader__.load({
         note: '独立工具，不进入歌曲换源。多轨输入用分号或换行分隔；输出响度归一 + 限幅。', submitLabel: '开始混音',
         fields: [
           { key: 'input_paths', label: '输入轨道（分号/换行）', required: true, placeholder: 'a.wav;b.wav' },
+          { key: 'track_gains', label: '逐轨增益 dB（逗号分隔）', kind: 'text', placeholder: '0,-3' },
+          { key: 'track_pans', label: '逐轨声像 -1..1（逗号分隔）', kind: 'text', placeholder: '0,0' },
+          { key: 'eq_low', label: '逐轨低频 EQ dB（100Hz）', kind: 'text', placeholder: '0,0' },
+          { key: 'eq_mid', label: '逐轨中频 EQ dB（1kHz）', kind: 'text', placeholder: '0,0' },
+          { key: 'eq_high', label: '逐轨高频 EQ dB（8kHz）', kind: 'text', placeholder: '0,0' },
           { key: 'loudness', label: '目标 LUFS', kind: 'text', initial: '-14' },
           { key: 'true_peak', label: '真峰值 dBTP', kind: 'text', initial: '-1' }
         ]
@@ -547,6 +552,19 @@ window.__ModuleLoader__.load({
           setName(''); setMessage('已创建并选中：' + value.data.name); await refresh()
         } catch (error) { setMessage('创建失败：' + String(error && error.message ? error.message : error)) }
       }
+      const importProject = () => {
+        const picker = document.createElement('input'); picker.type='file'; picker.accept='.zip'; picker.style.display='none'; document.body.appendChild(picker)
+        picker.onchange = async () => {
+          const file=picker.files&&picker.files[0]; picker.remove(); if(!file) return
+          try {
+            const response=await fetch('/ams/api/upload?name='+encodeURIComponent(file.name),{method:'POST',credentials:'same-origin',headers:{'content-type':'application/octet-stream'},body:file})
+            const text=await response.text(); const body=text?JSON.parse(text):null; if(!response.ok||!body||!body.data||!body.data.path) throw new Error('上传失败')
+            const result=await fetchJson('/ams/api/projects-import',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({archive_path:body.data.path})})
+            setMessage('已导入工程：'+result.data.name); await refresh()
+          } catch(error){ setMessage('导入失败：'+String(error&&error.message?error.message:error)) }
+        }
+        picker.click()
+      }
       const select = item => { setCurrent(item.id); window.localStorage.setItem('ams.currentProject', item.id); setMessage('当前工程：' + item.name) }
       const trash = async item => {
         if (!window.confirm('把工程 ' + item.name + ' 移入 data/trash？')) return
@@ -563,6 +581,7 @@ window.__ModuleLoader__.load({
           h('h2', { style: { fontSize: 16, marginTop: 0 } }, '新建工程'),
           h('input', { value: name, onChange: e => setName(e.target.value), placeholder: '工程名', style: { width: '100%', padding: 7, marginBottom: 6, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5 } }),
           h('button', { onClick: () => void create(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 12px' } }, '创建并选中'),
+          h('button', { onClick: importProject, style: { marginLeft: 8, background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '5px 12px' } }, '导入工程包'),
           message ? h('div', { style: { color: message.indexOf('失败') >= 0 ? COLORS.err : COLORS.ok, fontSize: 12, marginTop: 6 } }, message) : null),
         items.length === 0 ? h('div', { style: { color: COLORS.muted } }, '暂无工程。') : h('div', null, items.map(item => h('div', { key: item.id, style: { border: '1px solid ' + COLORS.border, borderRadius: 7, padding: 10, marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
           h('b', null, item.name), h('span', { style: { color: COLORS.muted, fontSize: 12 } }, item.id + ' · ' + jobs.filter(job => job.project_id === item.id).length + ' 个任务'),
@@ -570,6 +589,32 @@ window.__ModuleLoader__.load({
           h('button', { onClick: () => void exportProject(item), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 8px' } }, '导出工程'),
           h('button', { onClick: () => void trash(item), style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '3px 8px' } }, '移入回收站')))),
         h('div', { style: { color: COLORS.muted, fontSize: 12, marginTop: 10 } }, '当前工程关联任务：' + currentJobs.length + ' 个' + (currentJobs.length ? '（' + currentJobs.map(job => job.type + ':' + job.status).join(', ') + '）' : '')))
+    }
+
+
+    function MixTrackPanel(props) {
+      const [rows, setRows] = React.useState([{ path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0' }, { path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0' }])
+      const [loudness, setLoudness] = React.useState('-14')
+      const [peak, setPeak] = React.useState('-1')
+      const [message, setMessage] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const update = (index, key, value) => setRows(previous => previous.map((row, i) => i === index ? Object.assign({}, row, { [key]: value }) : row))
+      const submit = async () => {
+        const tracks = rows.filter(row => row.path.trim())
+        if (!tracks.length) { setMessage('至少填写一轨音频路径'); return }
+        setBusy(true)
+        const params = { input_paths: tracks.map(row => row.path.trim()).join(';'), track_gains: tracks.map(row => row.gain).join(','), track_pans: tracks.map(row => row.pan).join(','), eq_low: tracks.map(row => row.low).join(','), eq_mid: tracks.map(row => row.mid).join(','), eq_high: tracks.map(row => row.high).join(','), loudness, true_peak: peak }
+        const result = await props.consoleState.submitJob('mix.master', params)
+        setBusy(false); setMessage(result.ok ? '已提交混音任务 ' + result.job.id : '提交失败：' + result.message)
+      }
+      return h('div', null,
+        h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10 } }, '逐轨可视化：每行一轨，独立增益/声像/三段 EQ；输出响度归一 + 限幅。'),
+        rows.map((row, index) => h('div', { key: index, style: { border: '1px solid ' + COLORS.border, borderRadius: 7, padding: 8, marginBottom: 8 } },
+          h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, h('b', null, '轨 ' + (index + 1)), h('input', { value: row.path, onChange: e => update(index, 'path', e.target.value), placeholder: '音频路径', style: { flex: 1, padding: 5, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 4 } }), rows.length > 1 ? h('button', { onClick: () => setRows(previous => previous.filter((_, i) => i !== index)), style: { color: COLORS.err, background: 'transparent', border: '1px solid ' + COLORS.err, borderRadius: 4 } }, '删除') : null),
+          h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } }, [['gain', '增益 dB'], ['pan', '声像'], ['low', '低 100Hz'], ['mid', '中 1kHz'], ['high', '高 8kHz']].map(([key, label]) => h('label', { key, style: { color: COLORS.muted, fontSize: 11 } }, label, h('input', { value: row[key], onChange: e => update(index, key, e.target.value), style: { width: 72, marginLeft: 4, padding: 3, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 4 } })))))),
+        h('button', { onClick: () => setRows(previous => previous.concat([{ path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0' }])), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px' } }, '添加轨道'),
+        h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 } }, h('label', { style: { color: COLORS.muted } }, 'LUFS', h('input', { value: loudness, onChange: e => setLoudness(e.target.value), style: { width: 60, marginLeft: 4 } })), h('label', { style: { color: COLORS.muted } }, '峰值', h('input', { value: peak, onChange: e => setPeak(e.target.value), style: { width: 60, marginLeft: 4 } })), h('button', { disabled: busy, onClick: () => void submit(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 12px' } }, busy ? '提交中…' : '开始混音')),
+        message ? h('div', { style: { color: message.indexOf('失败') >= 0 ? COLORS.err : COLORS.ok, fontSize: 12, marginTop: 6 } }, message) : null)
     }
 
     function DatasetStudioPanel(props) {
@@ -1270,6 +1315,8 @@ window.__ModuleLoader__.load({
             }, item.label))),
           activeTab === 'project'
             ? h(ProjectPanel, null)
+            : activeTab === 'mix'
+            ? h(MixTrackPanel, { consoleState: consoleState })
             : activeTab === 'dataset'
             ? h(DatasetStudioPanel, { consoleState: consoleState, onUse: item => { setForms(previous => Object.assign({}, previous, { train: Object.assign({}, previous.train, { dataset_dir: item.path + '\\processed' }) })); setActiveTab('train'); setMessages(previous => Object.assign({}, previous, { train: { ok: true, text: '已选择数据集：' + item.name } })) } })
             : activeTab === 'tts_batch'

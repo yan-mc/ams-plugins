@@ -16,7 +16,17 @@ import { spawn, spawnSync } from 'node:child_process'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { listProjects, createProject, readProject, trashProject, exportProject } from './projects.js'
+function projectsRoot(home) { return join(home, 'projects') }
+function projectName(name) { const value = String(name || '').trim(); if (!value || value.length > 64 || /[\\/:*?"<>|]/.test(value) || value === 'imports') throw new Error('非法工程名'); return value }
+function listProjects(home) { const base=projectsRoot(home); const out=[]; let entries=[]; try{entries=readdirSync(base)}catch{return out}; for(const id of entries){ if(id==='imports'||id.startsWith('_'))continue; const dir=join(base,id); try{if(!statSync(dir).isDirectory())continue}catch{continue}; let meta=null; try{meta=JSON.parse(readFileSync(join(dir,'project.json'),'utf8'))}catch{continue}; out.push({id,name:meta.name||id,created_at:meta.created_at||'',updated_at:meta.updated_at||'',path:dir}) } return out }
+function createProject(home,name) { const clean=projectName(name); const base=projectsRoot(home); mkdirSync(base,{recursive:true}); const id='p_'+Date.now().toString(36); const dir=join(base,id); for(const sub of ['assets','mix','reports','exports'])mkdirSync(join(dir,sub),{recursive:true}); const now=new Date().toISOString(); const meta={schema:'ams.project/1',id,name:clean,created_at:now,updated_at:now,assets:[],steps:[],outputs:[]}; writeFileSync(join(dir,'project.json'),JSON.stringify(meta,null,2),'utf8'); return {id,name:clean,path:dir} }
+function projectDir(home,id) { const clean=String(id||''); if(!clean||clean.includes('/')||clean.includes('\\')||clean==='imports')throw new Error('非法工程 id'); const dir=join(projectsRoot(home),clean); if(!existsSync(dir))throw new Error('工程不存在'); return dir }
+function readProject(home,id) { return JSON.parse(readFileSync(join(projectDir(home,id),'project.json'),'utf8')) }
+function trashProject(home,id,moveToTrash) { moveToTrash(projectDir(home,id),'projects') }
+function exportProject(home,id,tarExe) { const dir=projectDir(home,id); const out=join(home,'exports','projects'); mkdirSync(out,{recursive:true}); const target=join(out,id+'-'+Date.now()+'.zip'); const r=spawnSync(tarExe(),['-a','-c','-f',target,'-C',dir,'.'],{windowsHide:true,encoding:'utf8'}); if(r.status!==0)throw new Error('打包失败：'+String(r.stderr||'').slice(0,300)); return target }
+function appendProjectStep(home,id,job) { if(!id)return; const dir=projectDir(home,id); const file=join(dir,'project.json'); const meta=JSON.parse(readFileSync(file,'utf8')); const steps=Array.isArray(meta.steps)?meta.steps:[]; const step={job_id:job.id,type:job.type,status:job.status||'queued',params:job.params||{},created_at:job.created_at||new Date().toISOString()}; const i=steps.findIndex(x=>x.job_id===job.id); if(i>=0)steps[i]=Object.assign({},steps[i],step); else steps.push(step); meta.steps=steps; meta.updated_at=new Date().toISOString(); writeFileSync(file,JSON.stringify(meta,null,2),'utf8') }
+function importProject(home,archive,name,tarExe) { const src=String(archive||''); if(!src.toLowerCase().endsWith('.zip')||!existsSync(src))throw new Error('工程 zip 不存在'); const tmp=join(home,'tmp','project-import-'+Date.now()); mkdirSync(tmp,{recursive:true}); const r=spawnSync(tarExe(),['-xf',src,'-C',tmp],{windowsHide:true,encoding:'utf8'}); if(r.status!==0)throw new Error('解包失败'); let found=null; const walk=dir=>{for(const e of readdirSync(dir)){const full=join(dir,e); if(e==='project.json'&&statSync(full).isFile()){found=full;return} if(statSync(full).isDirectory()){walk(full);if(found)return}}}; walk(tmp); if(!found)throw new Error('没有 project.json'); const meta=JSON.parse(readFileSync(found,'utf8')); const id='p_'+Date.now().toString(36); const target=join(projectsRoot(home),id); cpSync(join(found,'..'),target,{recursive:true}); meta.id=id; meta.name=name?projectName(name):(meta.name||id); meta.updated_at=new Date().toISOString(); writeFileSync(join(target,'project.json'),JSON.stringify(meta,null,2),'utf8'); return {id,name:meta.name,path:target} }
+
 
 export const name = 'ams-plugin-core'
 export const inject = ['tools', 'webServer']
@@ -1155,8 +1165,16 @@ export function apply(ctx) {
           return
         }
         if (joined.startsWith('projects/detail/') && req.method === 'GET') {
-          try { sendJson(res, 200, { ok: true, data: readProject(resolveAmsHome(), joined.slice('projects/detail/'.length)) }) }
-          catch (error) { sendJson(res, 404, { ok: false, error: { code: 'PROJECT_DETAIL_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          try {
+            const id = joined.slice('projects/detail/'.length); let meta = readProject(resolveAmsHome(), id); let jobs = []
+            try { const value = await gatewayRequest('/jobs?project_id=' + encodeURIComponent(id) + '&limit=100'); jobs = Array.isArray(value.data) ? value.data : []; for (const job of jobs) appendProjectStep(resolveAmsHome(), id, job); meta = readProject(resolveAmsHome(), id) } catch { /* no jobs */ }
+            sendJson(res, 200, { ok: true, data: { project: meta, jobs } })
+          } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'PROJECT_DETAIL_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'projects-import' && req.method === 'POST') {
+          try { const body = await readJsonBody(req); sendJson(res, 200, { ok: true, data: importProject(resolveAmsHome(), String(body.archive_path || ''), String(body.name || ''), tarExe) }) }
+          catch (error) { sendJson(res, 400, { ok: false, error: { code: 'PROJECT_IMPORT_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
         }
         if (joined === 'projects-trash' && req.method === 'POST') {
@@ -1180,7 +1198,9 @@ export function apply(ctx) {
           const body = await readJsonBody(req)
           const type = body && typeof body.type === 'string' && body.type !== '' ? body.type : 'ping'
           const params = body && typeof body.params === 'object' && body.params !== null ? body.params : {}
-          sendJson(res, 201, await gatewaySubmit(type, params, body && body.project_id))
+          const job = await gatewaySubmit(type, params, body && body.project_id)
+          if (body && body.project_id) { try { appendProjectStep(resolveAmsHome(), String(body.project_id), job) } catch { /* project may not exist */ } }
+          sendJson(res, 201, job)
           return
         }
         if (rest.length === 3 && rest[0] === 'jobs' && rest[2] === 'events' && req.method === 'GET') {
