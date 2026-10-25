@@ -89,6 +89,7 @@ window.__ModuleLoader__.load({
         submitLabel: '开始换源',
         fields: [
           { key: 'input_path', label: '纯人声输入', placeholder: '选择或导入已分离的人声文件', required: true, importable: true },
+          { key: 'batch_paths', label: '批量输入（可选，每行一个路径）', placeholder: '留空则只换源上面的单文件' },
           { key: 'voice_name', label: '目标音色', kind: 'select', optionsKey: 'voices', placeholder: '请选择目标音色', required: true },
           { key: 'f0_up_key', label: '变调（半音）', kind: 'number', initial: '0' },
           { key: 'f0_method', label: 'F0 方法', kind: 'select', options: ['rmvpe', 'pm', 'harvest', 'crepe'], initial: 'rmvpe' },
@@ -630,6 +631,10 @@ window.__ModuleLoader__.load({
       const [voicePreviews, setVoicePreviews] = React.useState({})
       const [previewBusy, setPreviewBusy] = React.useState(null)
       const [jobAudioUrl, setJobAudioUrl] = React.useState('')
+      const [abPairs, setAbPairs] = React.useState({})
+      const [abOriginal, setAbOriginal] = React.useState('')
+      const [abConverted, setAbConverted] = React.useState('')
+      const [eBusy, setEBusy] = React.useState(false)
       const [ttsBatchBusy, setTtsBatchBusy] = React.useState(false)
       const [ttsBatchMessage, setTtsBatchMessage] = React.useState(null)
       const [cancelBusy, setCancelBusy] = React.useState(null)
@@ -962,6 +967,34 @@ window.__ModuleLoader__.load({
         }
         picker.click()
       }
+
+      const useSeparatedJob = async jobId => {
+        setEBusy(true)
+        try {
+          const value = await fetchJson('/ams/api/job-artifacts/' + jobId)
+          const list = value && Array.isArray(value.data) ? value.data : []
+          const vocals = list.find(item => String(item.meta && item.meta.stem ? item.meta.stem : '').toLowerCase() === 'vocals') || list.find(item => String(item.name || '').toLowerCase().indexOf('vocal') >= 0)
+          if (!vocals || !vocals.path) throw new Error('该分离任务没有 vocals 产物')
+          setForms(previous => Object.assign({}, previous, { convert: Object.assign({}, previous.convert, { input_path: vocals.path }) }))
+          setActiveTab('convert')
+          setMessages(previous => Object.assign({}, previous, { convert: { ok: true, text: '已填入分离人声：' + vocals.name } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { jobs: { ok: false, text: '回填失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setEBusy(false) }
+      }
+      const exportJob = async jobId => {
+        setEBusy(true)
+        try {
+          const value = await fetchJson('/ams/api/job-export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ job_id: jobId }) })
+          setMessages(previous => Object.assign({}, previous, { jobs: { ok: true, text: '已导出纯人声：' + (value.data && value.data.path ? value.data.path : '') } }))
+        } catch (error) { setMessages(previous => Object.assign({}, previous, { jobs: { ok: false, text: '导出失败：' + String(error && error.message ? error.message : error) } })) }
+        finally { setEBusy(false) }
+      }
+      const showAB = jobId => {
+        const original = abPairs[jobId]
+        if (!original) { setMessages(previous => Object.assign({}, previous, { jobs: { ok: false, text: 'A/B 需要本次页面提交的换源任务；刷新后缺少原声路径' } })); return }
+        setAbOriginal('/ams/api/audio?path=' + encodeURIComponent(original))
+        setAbConverted('/ams/api/job-audio/' + jobId)
+      }
       const summary = consoleState.summary
       const gateway = summary && summary.gateway ? summary.gateway : null
       const tools = summary && Array.isArray(summary.tools) ? summary.tools : []
@@ -1057,7 +1090,7 @@ window.__ModuleLoader__.load({
 
       const onSubmit = async () => {
         if (tab.jobType === null || busyTab !== null) return
-        const missing = tab.fields.find(field => field.required && (form[field.key] === undefined || form[field.key] === null || String(form[field.key]).trim() === ''))
+        const missing = tab.fields.find(field => field.required && !(tab.id === 'convert' && field.key === 'input_path' && form.batch_paths && String(form.batch_paths).trim()) && (form[field.key] === undefined || form[field.key] === null || String(form[field.key]).trim() === ''))
         if (missing) {
           setMessages(previous => Object.assign({}, previous, { [tab.id]: { ok: false, text: '请先填写：' + missing.label } }))
           return
@@ -1069,9 +1102,25 @@ window.__ModuleLoader__.load({
           if (raw === undefined || raw === null || String(raw).trim() === '') continue
           params[field.key] = field.kind === 'number' ? Number(raw) : raw
         }
+        if (tab.id === 'convert' && form.batch_paths && String(form.batch_paths).trim()) {
+          const paths = String(form.batch_paths).split(/\r?\n/).map(value => value.trim()).filter(Boolean)
+          const ids = []
+          const errors = []
+          for (const path of paths) {
+            const item = Object.assign({}, params, { input_path: path })
+            delete item.batch_paths
+            const result = await consoleState.submitJob('convert.rvc', item)
+            if (result.ok) { ids.push(result.job.id); setAbPairs(previous => Object.assign({}, previous, { [result.job.id]: path })) } else errors.push(path + ': ' + result.message)
+          }
+          setBusyTab(null)
+          setMessages(previous => Object.assign({}, previous, { [tab.id]: { ok: errors.length === 0, text: '批量提交 ' + ids.length + ' 个任务' + (errors.length ? '；失败：' + errors.join('; ') : '') } }))
+          return
+        }
+        delete params.batch_paths
         const result = await consoleState.submitJob(tab.jobType, params)
         setBusyTab(null)
         if (result.ok) {
+          if (tab.id === 'convert') setAbPairs(previous => Object.assign({}, previous, { [result.job.id]: params.input_path }))
           setMessages(previous => Object.assign({}, previous, { [tab.id]: { ok: true, text: '已提交任务 ' + result.job.id + '（类型 ' + tab.jobType + '）' } }))
         } else {
           const hint = result.message.indexOf('422') >= 0 || result.message.indexOf('未知任务类型') >= 0
@@ -1184,8 +1233,15 @@ window.__ModuleLoader__.load({
                       }, cancelBusy === job.id ? '取消中…' : '取消')
                     : h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
                         job.status === 'succeeded' ? h('button', { type: 'button', onClick: () => setJobAudioUrl('/ams/api/job-audio/' + job.id), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '试听') : null,
+                        job.status === 'succeeded' && job.type === 'separate.pymss' ? h('button', { type: 'button', disabled: eBusy, onClick: () => { void useSeparatedJob(job.id) }, style: { background: 'transparent', color: COLORS.ok, border: '1px solid ' + COLORS.ok, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '用于换源') : null,
+                        job.status === 'succeeded' && job.type === 'convert.rvc' ? h('button', { type: 'button', disabled: eBusy, onClick: () => { void exportJob(job.id) }, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '导出纯人声') : null,
+                        job.status === 'succeeded' && job.type === 'convert.rvc' ? h('button', { type: 'button', onClick: () => showAB(job.id), style: { background: 'transparent', color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, 'A/B') : null,
                         h('span', { style: { color: COLORS.muted } }, '-'))))))),
-          jobAudioUrl ? h('div', { style: { marginTop: 10 } }, h('audio', { controls: true, src: jobAudioUrl, style: { width: '100%' } })) : null),
+          jobAudioUrl ? h('div', { style: { marginTop: 10 } }, h('audio', { controls: true, src: jobAudioUrl, style: { width: '100%' } })) : null,
+          abOriginal && abConverted ? h('div', { style: { marginTop: 12, padding: 10, border: '1px solid ' + COLORS.border, borderRadius: 7 } },
+            h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 6 } }, 'A/B：原声纯人声 / 换源纯人声'),
+            h('div', { style: { color: COLORS.text, fontSize: 12 } }, '原声'), h('audio', { controls: true, src: abOriginal, style: { width: '100%', marginBottom: 8 } }),
+            h('div', { style: { color: COLORS.text, fontSize: 12 } }, '换源'), h('audio', { controls: true, src: abConverted, style: { width: '100%' } })) : null),
 
         h('div', { style: cardStyle() },
           h('h2', { style: { margin: '0 0 10px', fontSize: 16 } }, '运行状态'),

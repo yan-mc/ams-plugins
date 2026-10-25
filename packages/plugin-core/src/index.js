@@ -887,6 +887,49 @@ export function apply(ctx) {
           } catch (error) { sendJson(res, 500, { ok: false, error: { code: 'VOICE_PREVIEW_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
         }
+
+        if (joined.startsWith('job-artifacts/') && req.method === 'GET') {
+          try {
+            const jobId = joined.slice('job-artifacts/'.length)
+            if (!/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('非法 job id')
+            const list = await gatewayArtifacts(jobId)
+            sendJson(res, 200, { ok: true, data: Array.isArray(list.data) ? list.data : (Array.isArray(list) ? list : []) })
+          } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'JOB_ARTIFACTS_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'audio' && req.method === 'GET') {
+          try {
+            const url = new URL(req.url, 'http://127.0.0.1')
+            const file = resolveAmsHome()
+            const candidate = resolve(String(url.searchParams.get('path') || ''))
+            const root = resolve(file)
+            if (!candidate.startsWith(root + sep)) throw new Error('路径不在 AMS_HOME')
+            if (!existsSync(candidate) || !statSync(candidate).isFile()) throw new Error('音频不存在')
+            const buffer = readFileSync(candidate)
+            res.statusCode = 200
+            res.setHeader('content-type', 'audio/wav')
+            res.setHeader('content-length', String(buffer.length))
+            res.end(buffer)
+          } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'AUDIO_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'job-export' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const jobId = String(body.job_id || '')
+            if (!/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('非法 job id')
+            const list = await gatewayArtifacts(jobId)
+            const artifacts = Array.isArray(list.data) ? list.data : (Array.isArray(list) ? list : [])
+            const audio = artifacts.find(entry => String(entry.kind || '').indexOf('audio') >= 0 || String(entry.name || '').toLowerCase().endsWith('.wav'))
+            if (!audio || !audio.path) throw new Error('没有可导出的音频产物')
+            const dir = join(resolveAmsHome(), 'exports', 'songs')
+            mkdirSync(dir, { recursive: true })
+            const target = join(dir, jobId + '-' + basename(audio.name))
+            cpSync(audio.path, target)
+            sendJson(res, 200, { ok: true, data: { path: target, name: basename(target) } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'JOB_EXPORT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
         if (joined.startsWith('job-audio/') && req.method === 'GET') {
           try {
             const jobId = joined.slice('job-audio/'.length)
