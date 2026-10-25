@@ -631,7 +631,9 @@ window.__ModuleLoader__.load({
       const [voicePreviews, setVoicePreviews] = React.useState({})
       const [previewBusy, setPreviewBusy] = React.useState(null)
       const [jobAudioUrl, setJobAudioUrl] = React.useState('')
-      const [abPairs, setAbPairs] = React.useState({})
+      const [abPairs, setAbPairs] = React.useState(() => { try { return JSON.parse(window.localStorage.getItem('ams.abPairs') || '{}') } catch { return {} } })
+      const [jobParams, setJobParams] = React.useState(() => { try { return JSON.parse(window.localStorage.getItem('ams.jobParams') || '{}') } catch { return {} } })
+      const [batchItems, setBatchItems] = React.useState([])
       const [abOriginal, setAbOriginal] = React.useState('')
       const [abConverted, setAbConverted] = React.useState('')
       const [eBusy, setEBusy] = React.useState(false)
@@ -995,6 +997,26 @@ window.__ModuleLoader__.load({
         setAbOriginal('/ams/api/audio?path=' + encodeURIComponent(original))
         setAbConverted('/ams/api/job-audio/' + jobId)
       }
+
+      const retryJob = async job => {
+        let params = jobParams[job.id]
+        if (!params) { try { params = JSON.parse(window.localStorage.getItem('ams.jobParams') || '{}')[job.id] } catch { params = null } }
+        if (!params) { setMessages(previous => Object.assign({}, previous, { jobs: { ok: false, text: '缺少该任务的原始参数，无法重试' } })); return }
+        const result = await consoleState.submitJob(job.type, params)
+        if (result.ok) {
+          setJobParams(previous => { const next = Object.assign({}, previous, { [result.job.id]: params }); try { window.localStorage.setItem('ams.jobParams', JSON.stringify(next)) } catch { /* ignore */ } return next })
+          setMessages(previous => Object.assign({}, previous, { jobs: { ok: true, text: '已重试：' + result.job.id } }))
+        } else setMessages(previous => Object.assign({}, previous, { jobs: { ok: false, text: '重试失败：' + result.message } }))
+      }
+      const retryBatchItem = async item => {
+        if (!item.params) { setMessages(previous => Object.assign({}, previous, { convert: { ok: false, text: '该批次项缺少参数，请重新提交' } })); return }
+        const result = await consoleState.submitJob('convert.rvc', item.params)
+        setBatchItems(previous => previous.map(entry => entry.path === item.path ? Object.assign({}, entry, { jobId: result.ok ? result.job.id : entry.jobId, ok: result.ok, message: result.ok ? '已重新提交' : result.message, params: item.params }) : entry))
+        if (result.ok) {
+          setJobParams(previous => { const next = Object.assign({}, previous, { [result.job.id]: item.params }); try { window.localStorage.setItem('ams.jobParams', JSON.stringify(next)) } catch { /* ignore */ } return next })
+          setAbPairs(previous => { const next = Object.assign({}, previous, { [result.job.id]: item.path }); try { window.localStorage.setItem('ams.abPairs', JSON.stringify(next)) } catch { /* ignore */ } return next })
+        }
+      }
       const summary = consoleState.summary
       const gateway = summary && summary.gateway ? summary.gateway : null
       const tools = summary && Array.isArray(summary.tools) ? summary.tools : []
@@ -1110,7 +1132,12 @@ window.__ModuleLoader__.load({
             const item = Object.assign({}, params, { input_path: path })
             delete item.batch_paths
             const result = await consoleState.submitJob('convert.rvc', item)
-            if (result.ok) { ids.push(result.job.id); setAbPairs(previous => Object.assign({}, previous, { [result.job.id]: path })) } else errors.push(path + ': ' + result.message)
+            if (result.ok) {
+            ids.push(result.job.id)
+            setAbPairs(previous => { const next = Object.assign({}, previous, { [result.job.id]: path }); try { window.localStorage.setItem('ams.abPairs', JSON.stringify(next)) } catch { /* ignore */ } return next })
+            setJobParams(previous => { const next = Object.assign({}, previous, { [result.job.id]: item }); try { window.localStorage.setItem('ams.jobParams', JSON.stringify(next)) } catch { /* ignore */ } return next })
+            setBatchItems(previous => previous.concat([{ path, jobId: result.job.id, ok: true, message: '已提交', params: Object.assign({}, item) }]))
+          } else { errors.push(path + ': ' + result.message); setBatchItems(previous => previous.concat([{ path, jobId: '', ok: false, message: result.message, params: Object.assign({}, item) }])) }
           }
           setBusyTab(null)
           setMessages(previous => Object.assign({}, previous, { [tab.id]: { ok: errors.length === 0, text: '批量提交 ' + ids.length + ' 个任务' + (errors.length ? '；失败：' + errors.join('; ') : '') } }))
@@ -1120,7 +1147,8 @@ window.__ModuleLoader__.load({
         const result = await consoleState.submitJob(tab.jobType, params)
         setBusyTab(null)
         if (result.ok) {
-          if (tab.id === 'convert') setAbPairs(previous => Object.assign({}, previous, { [result.job.id]: params.input_path }))
+          if (tab.id === 'convert') setAbPairs(previous => { const next = Object.assign({}, previous, { [result.job.id]: params.input_path }); try { window.localStorage.setItem('ams.abPairs', JSON.stringify(next)) } catch { /* ignore */ } return next })
+          setJobParams(previous => { const next = Object.assign({}, previous, { [result.job.id]: params }); try { window.localStorage.setItem('ams.jobParams', JSON.stringify(next)) } catch { /* ignore */ } return next })
           setMessages(previous => Object.assign({}, previous, { [tab.id]: { ok: true, text: '已提交任务 ' + result.job.id + '（类型 ' + tab.jobType + '）' } }))
         } else {
           const hint = result.message.indexOf('422') >= 0 || result.message.indexOf('未知任务类型') >= 0
@@ -1236,12 +1264,19 @@ window.__ModuleLoader__.load({
                         job.status === 'succeeded' && job.type === 'separate.pymss' ? h('button', { type: 'button', disabled: eBusy, onClick: () => { void useSeparatedJob(job.id) }, style: { background: 'transparent', color: COLORS.ok, border: '1px solid ' + COLORS.ok, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '用于换源') : null,
                         job.status === 'succeeded' && job.type === 'convert.rvc' ? h('button', { type: 'button', disabled: eBusy, onClick: () => { void exportJob(job.id) }, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '导出纯人声') : null,
                         job.status === 'succeeded' && job.type === 'convert.rvc' ? h('button', { type: 'button', onClick: () => showAB(job.id), style: { background: 'transparent', color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, 'A/B') : null,
+                        (job.status === 'failed' || job.status === 'cancelled') ? h('button', { type: 'button', onClick: () => { void retryJob(job) }, style: { background: 'transparent', color: COLORS.warn, border: '1px solid ' + COLORS.warn, borderRadius: 5, padding: '2px 7px', fontSize: 12 } }, '重试') : null,
                         h('span', { style: { color: COLORS.muted } }, '-'))))))),
           jobAudioUrl ? h('div', { style: { marginTop: 10 } }, h('audio', { controls: true, src: jobAudioUrl, style: { width: '100%' } })) : null,
           abOriginal && abConverted ? h('div', { style: { marginTop: 12, padding: 10, border: '1px solid ' + COLORS.border, borderRadius: 7 } },
             h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 6 } }, 'A/B：原声纯人声 / 换源纯人声'),
             h('div', { style: { color: COLORS.text, fontSize: 12 } }, '原声'), h('audio', { controls: true, src: abOriginal, style: { width: '100%', marginBottom: 8 } }),
-            h('div', { style: { color: COLORS.text, fontSize: 12 } }, '换源'), h('audio', { controls: true, src: abConverted, style: { width: '100%' } })) : null),
+            h('div', { style: { color: COLORS.text, fontSize: 12 } }, '换源'), h('audio', { controls: true, src: abConverted, style: { width: '100%' } })) : null,
+          batchItems.length > 0 ? h('div', { style: { marginTop: 12, padding: 10, border: '1px solid ' + COLORS.border, borderRadius: 7 } },
+            h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 6 } }, '批量换源队列'),
+            batchItems.map((item, index) => h('div', { key: item.path + index, style: { display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, marginBottom: 4 } },
+              h('span', { style: { flex: 1, color: item.ok ? COLORS.ok : COLORS.err, overflow: 'hidden', textOverflow: 'ellipsis' } }, item.path),
+              h('span', { style: { color: COLORS.muted } }, item.message),
+              h('button', { type: 'button', onClick: () => { void retryBatchItem(item) }, style: { background: 'transparent', color: COLORS.warn, border: '1px solid ' + COLORS.warn, borderRadius: 5, padding: '1px 6px' } }, '重试')))) : null),
 
         h('div', { style: cardStyle() },
           h('h2', { style: { margin: '0 0 10px', fontSize: 16 } }, '运行状态'),
