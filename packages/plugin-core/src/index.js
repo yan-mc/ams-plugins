@@ -25,6 +25,33 @@ function readProject(home,id) { return JSON.parse(readFileSync(join(projectDir(h
 function trashProject(home,id,moveToTrash) { moveToTrash(projectDir(home,id),'projects') }
 function exportProject(home,id,tarExe) { const dir=projectDir(home,id); const out=join(home,'exports','projects'); mkdirSync(out,{recursive:true}); const target=join(out,id+'-'+Date.now()+'.zip'); const r=spawnSync(tarExe(),['-a','-c','-f',target,'-C',dir,'.'],{windowsHide:true,encoding:'utf8'}); if(r.status!==0)throw new Error('打包失败：'+String(r.stderr||'').slice(0,300)); return target }
 function appendProjectStep(home,id,job) { if(!id)return; const dir=projectDir(home,id); const file=join(dir,'project.json'); const meta=JSON.parse(readFileSync(file,'utf8')); const steps=Array.isArray(meta.steps)?meta.steps:[]; const step={job_id:job.id,type:job.type,status:job.status||'queued',params:job.params||{},created_at:job.created_at||new Date().toISOString()}; const i=steps.findIndex(x=>x.job_id===job.id); if(i>=0)steps[i]=Object.assign({},steps[i],step); else steps.push(step); meta.steps=steps; meta.updated_at=new Date().toISOString(); writeFileSync(file,JSON.stringify(meta,null,2),'utf8') }
+function updateProjectStep(home, id, job) {
+  if (!id) return
+  try {
+    const dir = projectDir(home, id); const file = join(dir, 'project.json')
+    const meta = JSON.parse(readFileSync(file, 'utf8')); const steps = Array.isArray(meta.steps) ? meta.steps : []
+    const item = { job_id: job.id, type: job.type, status: job.status || 'queued', progress: job.progress || 0, error: job.error || null, updated_at: new Date().toISOString() }
+    const i = steps.findIndex(x => x.job_id === job.id); if (i >= 0) steps[i] = Object.assign({}, steps[i], item); else steps.push(item)
+    meta.steps = steps; meta.updated_at = new Date().toISOString(); writeFileSync(file, JSON.stringify(meta, null, 2), 'utf8')
+  } catch { /* project deleted */ }
+}
+const PROJECT_WATCHERS = new Map()
+function watchProjectJob(home, projectId, jobId) {
+  if (!projectId || !jobId || PROJECT_WATCHERS.has(jobId)) return
+  const stop = () => PROJECT_WATCHERS.delete(jobId)
+  PROJECT_WATCHERS.set(jobId, stop)
+  ;(async () => {
+    for (let i = 0; i < 3600; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      try {
+        const job = await gatewayJob(jobId)
+        updateProjectStep(home, projectId, job)
+        if (['succeeded', 'failed', 'cancelled'].includes(job.status)) { stop(); return }
+      } catch { /* retry */ }
+    }
+    stop()
+  })()
+}
 function importProject(home,archive,name,tarExe) { const src=String(archive||''); if(!src.toLowerCase().endsWith('.zip')||!existsSync(src))throw new Error('工程 zip 不存在'); const tmp=join(home,'tmp','project-import-'+Date.now()); mkdirSync(tmp,{recursive:true}); const r=spawnSync(tarExe(),['-xf',src,'-C',tmp],{windowsHide:true,encoding:'utf8'}); if(r.status!==0)throw new Error('解包失败'); let found=null; const walk=dir=>{for(const e of readdirSync(dir)){const full=join(dir,e); if(e==='project.json'&&statSync(full).isFile()){found=full;return} if(statSync(full).isDirectory()){walk(full);if(found)return}}}; walk(tmp); if(!found)throw new Error('没有 project.json'); const meta=JSON.parse(readFileSync(found,'utf8')); const id='p_'+Date.now().toString(36); const target=join(projectsRoot(home),id); cpSync(join(found,'..'),target,{recursive:true}); meta.id=id; meta.name=name?projectName(name):(meta.name||id); meta.updated_at=new Date().toISOString(); writeFileSync(join(target,'project.json'),JSON.stringify(meta,null,2),'utf8'); return {id,name:meta.name,path:target} }
 
 
@@ -1199,7 +1226,7 @@ export function apply(ctx) {
           const type = body && typeof body.type === 'string' && body.type !== '' ? body.type : 'ping'
           const params = body && typeof body.params === 'object' && body.params !== null ? body.params : {}
           const job = await gatewaySubmit(type, params, body && body.project_id)
-          if (body && body.project_id) { try { appendProjectStep(resolveAmsHome(), String(body.project_id), job) } catch { /* project may not exist */ } }
+          if (body && body.project_id) { try { appendProjectStep(resolveAmsHome(), String(body.project_id), job); watchProjectJob(resolveAmsHome(), String(body.project_id), job.id) } catch { /* project may not exist */ } }
           sendJson(res, 201, job)
           return
         }

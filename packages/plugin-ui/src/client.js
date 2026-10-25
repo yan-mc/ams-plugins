@@ -593,7 +593,8 @@ window.__ModuleLoader__.load({
 
 
     function MixTrackPanel(props) {
-      const [rows, setRows] = React.useState([{ path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0' }, { path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0' }])
+      const [rows, setRows] = React.useState([{ path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0', hp: '', lp: '', mute: '0' }, { path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0', hp: '', lp: '', mute: '0' }])
+      const [compressor, setCompressor] = React.useState(true)
       const [loudness, setLoudness] = React.useState('-14')
       const [peak, setPeak] = React.useState('-1')
       const [message, setMessage] = React.useState('')
@@ -603,7 +604,7 @@ window.__ModuleLoader__.load({
         const tracks = rows.filter(row => row.path.trim())
         if (!tracks.length) { setMessage('至少填写一轨音频路径'); return }
         setBusy(true)
-        const params = { input_paths: tracks.map(row => row.path.trim()).join(';'), track_gains: tracks.map(row => row.gain).join(','), track_pans: tracks.map(row => row.pan).join(','), eq_low: tracks.map(row => row.low).join(','), eq_mid: tracks.map(row => row.mid).join(','), eq_high: tracks.map(row => row.high).join(','), loudness, true_peak: peak }
+        const params = { input_paths: tracks.map(row => row.path.trim()).join(';'), track_gains: tracks.map(row => row.gain).join(','), track_pans: tracks.map(row => row.pan).join(','), eq_low: tracks.map(row => row.low).join(','), eq_mid: tracks.map(row => row.mid).join(','), eq_high: tracks.map(row => row.high).join(','), highpass: tracks.map(row => row.hp).join(','), lowpass: tracks.map(row => row.lp).join(','), track_mutes: tracks.map(row => row.mute).join(','), compressor: compressor ? 'true' : 'false', loudness, true_peak: peak }
         const result = await props.consoleState.submitJob('mix.master', params)
         setBusy(false); setMessage(result.ok ? '已提交混音任务 ' + result.job.id : '提交失败：' + result.message)
       }
@@ -611,9 +612,9 @@ window.__ModuleLoader__.load({
         h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10 } }, '逐轨可视化：每行一轨，独立增益/声像/三段 EQ；输出响度归一 + 限幅。'),
         rows.map((row, index) => h('div', { key: index, style: { border: '1px solid ' + COLORS.border, borderRadius: 7, padding: 8, marginBottom: 8 } },
           h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, h('b', null, '轨 ' + (index + 1)), h('input', { value: row.path, onChange: e => update(index, 'path', e.target.value), placeholder: '音频路径', style: { flex: 1, padding: 5, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 4 } }), rows.length > 1 ? h('button', { onClick: () => setRows(previous => previous.filter((_, i) => i !== index)), style: { color: COLORS.err, background: 'transparent', border: '1px solid ' + COLORS.err, borderRadius: 4 } }, '删除') : null),
-          h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } }, [['gain', '增益 dB'], ['pan', '声像'], ['low', '低 100Hz'], ['mid', '中 1kHz'], ['high', '高 8kHz']].map(([key, label]) => h('label', { key, style: { color: COLORS.muted, fontSize: 11 } }, label, h('input', { value: row[key], onChange: e => update(index, key, e.target.value), style: { width: 72, marginLeft: 4, padding: 3, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 4 } })))))),
-        h('button', { onClick: () => setRows(previous => previous.concat([{ path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0' }])), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px' } }, '添加轨道'),
-        h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 } }, h('label', { style: { color: COLORS.muted } }, 'LUFS', h('input', { value: loudness, onChange: e => setLoudness(e.target.value), style: { width: 60, marginLeft: 4 } })), h('label', { style: { color: COLORS.muted } }, '峰值', h('input', { value: peak, onChange: e => setPeak(e.target.value), style: { width: 60, marginLeft: 4 } })), h('button', { disabled: busy, onClick: () => void submit(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 12px' } }, busy ? '提交中…' : '开始混音')),
+          h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } }, [['gain', '增益 dB'], ['pan', '声像'], ['low', '低 100Hz'], ['mid', '中 1kHz'], ['high', '高 8kHz'], ['hp', 'HP Hz'], ['lp', 'LP Hz'], ['mute', '静音 1/0']].map(([key, label]) => h('label', { key, style: { color: COLORS.muted, fontSize: 11 } }, label, h('input', { value: row[key], onChange: e => update(index, key, e.target.value), style: { width: 72, marginLeft: 4, padding: 3, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 4 } })))))),
+        h('button', { onClick: () => setRows(previous => previous.concat([{ path: '', gain: '0', pan: '0', low: '0', mid: '0', high: '0', hp: '', lp: '', mute: '0' }])), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px' } }, '添加轨道'),
+        h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 } }, h('label', { style: { color: COLORS.muted } }, 'LUFS', h('input', { value: loudness, onChange: e => setLoudness(e.target.value), style: { width: 60, marginLeft: 4 } })), h('label', { style: { color: COLORS.muted } }, '峰值', h('input', { value: peak, onChange: e => setPeak(e.target.value), style: { width: 60, marginLeft: 4 } })), h('label', { style: { color: COLORS.muted } }, h('input', { type: 'checkbox', checked: compressor, onChange: e => setCompressor(e.target.checked) }), ' 总线压缩'), h('button', { disabled: busy, onClick: () => void submit(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 12px' } }, busy ? '提交中…' : '开始混音')),
         message ? h('div', { style: { color: message.indexOf('失败') >= 0 ? COLORS.err : COLORS.ok, fontSize: 12, marginTop: 6 } }, message) : null)
     }
 
