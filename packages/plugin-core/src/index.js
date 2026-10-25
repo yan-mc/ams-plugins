@@ -930,6 +930,8 @@ export function apply(ctx) {
             const root = join(resolveAmsHome(), 'datasets'); const from = join(root, oldName); const to = join(root, newName)
             if (!existsSync(from) || existsSync(to)) throw new Error('源不存在或目标已存在')
             renameSync(from, to)
+            const metaPath = join(to, 'dataset.json')
+            try { const meta = JSON.parse(readFileSync(metaPath, 'utf8')); meta.name = newName; meta.updated_at = new Date().toISOString(); writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8') } catch { /* no dataset.json */ }
             sendJson(res, 200, { ok: true, data: { name: newName } })
           } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'DATASET_RENAME_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
