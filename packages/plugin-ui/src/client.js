@@ -144,6 +144,29 @@ window.__ModuleLoader__.load({
           { key: 'text', label: '要合成的文本', kind: 'textarea', required: true, placeholder: '输入文本（最多 2000 字）' },
           { key: 'model', label: 'TTS 模型', kind: 'select', optionsKey: 'ttsModels', placeholder: '留空使用默认模型' }
         ]
+      },
+      {
+        id: 'tts_dataset', label: 'TTS 数据集', jobType: 'tts.dataset.prepare',
+        note: '导入 metadata.csv + wav/，校验并复制到 data/datasets/tts/<名称>。',
+        submitLabel: '导入 TTS 数据集',
+        fields: [
+          { key: 'source_path', label: '源数据集目录', placeholder: '含 metadata.csv 与 wav/ 的目录', required: true },
+          { key: 'dataset_name', label: '数据集名称', placeholder: 'xianyun_tts', required: true }
+        ]
+      },
+      {
+        id: 'tts_train', label: 'TTS 音源炼制', jobType: 'train.tts',
+        note: 'Piper/VITS 训练：数据集需含 metadata.csv 和 wav/；训练完成后自动注册到 data/tts_voices。',
+        submitLabel: '开始 TTS 炼制',
+        fields: [
+          { key: 'dataset_dir', label: 'TTS 数据集目录', placeholder: 'data/datasets/tts/<名称>', required: true },
+          { key: 'model_name', label: '模型名', placeholder: '我的TTS音色', required: true },
+          { key: 'language', label: '语言/音素集', kind: 'select', options: ['cmn', 'en-us'], initial: 'cmn' },
+          { key: 'epochs', label: 'Epochs', kind: 'number', initial: '1' },
+          { key: 'batch_size', label: 'Batch size', kind: 'number', initial: '2' },
+          { key: 'base_checkpoint', label: '基础 checkpoint（可留空）', placeholder: 'data/runtime/tts-train/0.1.0/checkpoints/epoch=...ckpt' },
+          { key: 'quality', label: '质量', kind: 'select', options: ['medium', 'high'], initial: 'medium' }
+        ]
       }
     ]
 
