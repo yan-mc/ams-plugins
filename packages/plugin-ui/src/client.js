@@ -67,6 +67,23 @@ window.__ModuleLoader__.load({
         ]
       },
       {
+        id: 'evaluate', label: '评测器', jobType: 'evaluate.audio',
+        note: '客观指标：时长/采样率/声道/削波/静音/RMS；可选参考音频计算 SNR。', submitLabel: '开始评测',
+        fields: [
+          { key: 'input_path', label: '待评测音频', required: true, importable: true },
+          { key: 'reference_path', label: '参考音频（可选）', importable: true }
+        ]
+      },
+      {
+        id: 'mix', label: '混音母带', jobType: 'mix.master',
+        note: '独立工具，不进入歌曲换源。多轨输入用分号或换行分隔；输出响度归一 + 限幅。', submitLabel: '开始混音',
+        fields: [
+          { key: 'input_paths', label: '输入轨道（分号/换行）', required: true, placeholder: 'a.wav;b.wav' },
+          { key: 'loudness', label: '目标 LUFS', kind: 'text', initial: '-14' },
+          { key: 'true_peak', label: '真峰值 dBTP', kind: 'text', initial: '-1' }
+        ]
+      },
+      {
         id: 'separate', label: '人声分离', jobType: 'separate.pymss',
         note: 'pymss 人声/伴奏分离（GPU 串行队列）。输入整曲，输出 vocals/drums/bass/other stems。',
         submitLabel: '开始分离',
@@ -128,7 +145,8 @@ window.__ModuleLoader__.load({
     const VC_TAB = { id: 'realtime', label: '实时变声', jobType: null, fields: [], note: '实时变声：独立 VC 服务，麦克风/系统输出 → RVC → VB-Cable。' }
     const LIBRARY_TAB = { id: 'library', label: '音色库', jobType: null, fields: [], note: '音色库：标签、备注、收藏、index 状态；删除只移动到 data/trash。' }
     const TTS_BATCH_TAB = { id: 'tts_batch', label: 'TTS 批量', jobType: null, fields: [], note: '同一文本批量合成多个 TTS 音色。' }
-    const ALL_TABS = [VC_TAB, LIBRARY_TAB, TTS_BATCH_TAB].concat(FEATURE_TABS)
+    const PROJECT_TAB = { id: 'project', label: '项目', jobType: null, fields: [], note: '工程、步骤和产物关联。' }
+    const ALL_TABS = [PROJECT_TAB, VC_TAB, LIBRARY_TAB, TTS_BATCH_TAB].concat(FEATURE_TABS)
 
     function cardStyle(extra) {
       return Object.assign({
@@ -322,7 +340,7 @@ window.__ModuleLoader__.load({
       const submitJob = React.useCallback(async (type, params) => {
         setError(null)
         try {
-          const job = await fetchJson(JOBS_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, params }) })
+          const job = await fetchJson(JOBS_PATH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type, params, project_id: (() => { try { return window.localStorage.getItem('ams.currentProject') || null } catch { return null } })() }) })
           if (job && job.id) setWatched(job.id)
           setSseState('idle')
           retryRef.current = 0
@@ -502,6 +520,56 @@ window.__ModuleLoader__.load({
         status.last_error ? h("div", { style: { color: COLORS.err, fontSize: 12, marginTop: 8 } }, "错误：" + status.last_error) : null,
         message ? h("div", { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginTop: 8 } }, message.text) : null
       )
+    }
+
+
+    function ProjectPanel(props) {
+      const [items, setItems] = React.useState([])
+      const [current, setCurrent] = React.useState(() => { try { return window.localStorage.getItem('ams.currentProject') || '' } catch { return '' } })
+      const [name, setName] = React.useState('')
+      const [message, setMessage] = React.useState('')
+      const [jobs, setJobs] = React.useState([])
+      const refresh = async () => {
+        try {
+          const value = await fetchJson('/ams/api/projects')
+          setItems(value && Array.isArray(value.data) ? value.data : [])
+          const jobValue = await fetchJson('/ams/api/jobs')
+          const list = jobValue && Array.isArray(jobValue.data) ? jobValue.data : []
+          setJobs(list)
+        } catch (error) { setMessage('读取工程失败：' + String(error && error.message ? error.message : error)) }
+      }
+      React.useEffect(() => { void refresh() }, [])
+      const create = async () => {
+        if (!name.trim()) { setMessage('请填写工程名'); return }
+        try {
+          const value = await fetchJson('/ams/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) })
+          setCurrent(value.data.id); window.localStorage.setItem('ams.currentProject', value.data.id)
+          setName(''); setMessage('已创建并选中：' + value.data.name); await refresh()
+        } catch (error) { setMessage('创建失败：' + String(error && error.message ? error.message : error)) }
+      }
+      const select = item => { setCurrent(item.id); window.localStorage.setItem('ams.currentProject', item.id); setMessage('当前工程：' + item.name) }
+      const trash = async item => {
+        if (!window.confirm('把工程 ' + item.name + ' 移入 data/trash？')) return
+        try { await fetchJson('/ams/api/projects-trash', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id }) }); if (current === item.id) { setCurrent(''); window.localStorage.removeItem('ams.currentProject') }; setMessage('已移入回收站'); await refresh() } catch (error) { setMessage('移动失败：' + String(error && error.message ? error.message : error)) }
+      }
+      const exportProject = async item => {
+        try { const value = await fetchJson('/ams/api/projects-export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id }) }); setMessage('已导出：' + value.data.path) } catch (error) { setMessage('导出失败：' + String(error && error.message ? error.message : error)) }
+      }
+      const currentName = (items.find(item => item.id === current) || {}).name || '未选择'
+      const currentJobs = jobs.filter(job => job.project_id === current)
+      return h('div', null,
+        h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10 } }, '当前工程：' + currentName + '；提交任务时会自动带 project_id。删除只移到 data/trash。'),
+        h('div', { style: cardStyle() },
+          h('h2', { style: { fontSize: 16, marginTop: 0 } }, '新建工程'),
+          h('input', { value: name, onChange: e => setName(e.target.value), placeholder: '工程名', style: { width: '100%', padding: 7, marginBottom: 6, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5 } }),
+          h('button', { onClick: () => void create(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 12px' } }, '创建并选中'),
+          message ? h('div', { style: { color: message.indexOf('失败') >= 0 ? COLORS.err : COLORS.ok, fontSize: 12, marginTop: 6 } }, message) : null),
+        items.length === 0 ? h('div', { style: { color: COLORS.muted } }, '暂无工程。') : h('div', null, items.map(item => h('div', { key: item.id, style: { border: '1px solid ' + COLORS.border, borderRadius: 7, padding: 10, marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('b', null, item.name), h('span', { style: { color: COLORS.muted, fontSize: 12 } }, item.id + ' · ' + jobs.filter(job => job.project_id === item.id).length + ' 个任务'),
+          h('button', { onClick: () => select(item), style: { marginLeft: 'auto', background: current === item.id ? COLORS.ok : COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '3px 8px' } }, current === item.id ? '当前' : '选择'),
+          h('button', { onClick: () => void exportProject(item), style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '3px 8px' } }, '导出工程'),
+          h('button', { onClick: () => void trash(item), style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '3px 8px' } }, '移入回收站')))),
+        h('div', { style: { color: COLORS.muted, fontSize: 12, marginTop: 10 } }, '当前工程关联任务：' + currentJobs.length + ' 个' + (currentJobs.length ? '（' + currentJobs.map(job => job.type + ':' + job.status).join(', ') + '）' : '')))
     }
 
     function DatasetStudioPanel(props) {
@@ -1200,7 +1268,9 @@ window.__ModuleLoader__.load({
               },
               onClick: () => setActiveTab(item.id)
             }, item.label))),
-          activeTab === 'dataset'
+          activeTab === 'project'
+            ? h(ProjectPanel, null)
+            : activeTab === 'dataset'
             ? h(DatasetStudioPanel, { consoleState: consoleState, onUse: item => { setForms(previous => Object.assign({}, previous, { train: Object.assign({}, previous.train, { dataset_dir: item.path + '\\processed' }) })); setActiveTab('train'); setMessages(previous => Object.assign({}, previous, { train: { ok: true, text: '已选择数据集：' + item.name } })) } })
             : activeTab === 'tts_batch'
             ? h(TtsBatchPanel, { models: ttsModels, busy: ttsBatchBusy, message: ttsBatchMessage, onSubmit: (text, models) => { void submitTtsBatch(text, models) } })

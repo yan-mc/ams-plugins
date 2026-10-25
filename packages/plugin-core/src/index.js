@@ -16,6 +16,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { listProjects, createProject, readProject, trashProject, exportProject } from './projects.js'
 
 export const name = 'ams-plugin-core'
 export const inject = ['tools', 'webServer']
@@ -420,11 +421,11 @@ function gatewayImportAsset(sourcePath, projectId) {
   })
 }
 
-function gatewaySubmit(type, params) {
+function gatewaySubmit(type, params, projectId) {
   return gatewayRequest('/jobs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type, params: params || {} })
+    body: JSON.stringify({ type, params: params || {}, project_id: projectId || null })
   })
 }
 
@@ -1147,6 +1148,27 @@ export function apply(ctx) {
           return
         }
         if (joined === 'jobs' && req.method === 'GET') { sendJson(res, 200, await gatewayJobs(50)); return }
+        if (joined === 'projects' && req.method === 'GET') { sendJson(res, 200, { ok: true, data: listProjects(resolveAmsHome()) }); return }
+        if (joined === 'projects' && req.method === 'POST') {
+          try { const body = await readJsonBody(req); sendJson(res, 200, { ok: true, data: createProject(resolveAmsHome(), String(body.name || '')) }) }
+          catch (error) { sendJson(res, 400, { ok: false, error: { code: 'PROJECT_CREATE_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined.startsWith('projects/detail/') && req.method === 'GET') {
+          try { sendJson(res, 200, { ok: true, data: readProject(resolveAmsHome(), joined.slice('projects/detail/'.length)) }) }
+          catch (error) { sendJson(res, 404, { ok: false, error: { code: 'PROJECT_DETAIL_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'projects-trash' && req.method === 'POST') {
+          try { const body = await readJsonBody(req); trashProject(resolveAmsHome(), String(body.id || ''), moveToTrash); sendJson(res, 200, { ok: true, data: { id: body.id } }) }
+          catch (error) { sendJson(res, 400, { ok: false, error: { code: 'PROJECT_TRASH_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'projects-export' && req.method === 'POST') {
+          try { const body = await readJsonBody(req); const path = exportProject(resolveAmsHome(), String(body.id || ''), tarExe); sendJson(res, 200, { ok: true, data: { path } }) }
+          catch (error) { sendJson(res, 400, { ok: false, error: { code: 'PROJECT_EXPORT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
         if (joined === 'projects/import' && req.method === 'POST') {
           const body = await readJsonBody(req)
           const sourcePath = body && typeof body.source_path === 'string' ? body.source_path : ''
@@ -1158,7 +1180,7 @@ export function apply(ctx) {
           const body = await readJsonBody(req)
           const type = body && typeof body.type === 'string' && body.type !== '' ? body.type : 'ping'
           const params = body && typeof body.params === 'object' && body.params !== null ? body.params : {}
-          sendJson(res, 201, await gatewaySubmit(type, params))
+          sendJson(res, 201, await gatewaySubmit(type, params, body && body.project_id))
           return
         }
         if (rest.length === 3 && rest[0] === 'jobs' && rest[2] === 'events' && req.method === 'GET') {
