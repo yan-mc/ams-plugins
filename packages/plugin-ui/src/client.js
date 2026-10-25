@@ -39,7 +39,7 @@ window.__ModuleLoader__.load({
     const FEATURE_TABS = [
       {
         id: 'train', label: '音源炼制', jobType: 'train.rvc',
-        note: '训练音色模型（RVC 管线）。参数按协议透传给 Gateway；若当前 Gateway 未注册 train.rvc，提交会在页面显示错误原因。',
+        note: '训练音色模型（RVC 管线）。默认 v2/48k；40k 仅 v1。显存不足时把 batch 降到 1–2；当前不会自动回退。',
         submitLabel: '开始炼制',
         fields: [
           { key: 'dataset_dir', label: '训练数据集目录', placeholder: 'data/datasets/<名称>/sources 或 processed', importable: true },
@@ -502,6 +502,51 @@ window.__ModuleLoader__.load({
         message ? h("div", { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12, marginTop: 8 } }, message.text) : null
       )
     }
+
+    function DatasetStudioPanel(props) {
+      const [items, setItems] = React.useState([])
+      const [source, setSource] = React.useState('')
+      const [name, setName] = React.useState('')
+      const [message, setMessage] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const refresh = async () => {
+        try { const value = await fetchJson('/ams/api/datasets'); setItems(value && Array.isArray(value.data) ? value.data : []) } catch (error) { setMessage('读取数据集失败：' + String(error && error.message ? error.message : error)) }
+      }
+      React.useEffect(() => { void refresh() }, [])
+      const create = async () => {
+        if (!source.trim() || !name.trim()) { setMessage('请填写源路径和名称'); return }
+        setBusy(true)
+        const result = await props.consoleState.submitJob('dataset.prepare', { source_path: source.trim(), dataset_name: name.trim(), target_sr: 48000, min_sec: 3, max_sec: 10 })
+        setBusy(false)
+        setMessage(result.ok ? '已提交数据集任务 ' + result.job.id : '提交失败：' + result.message)
+        if (result.ok) { await refresh() }
+      }
+      const rename = async item => {
+        const value = window.prompt('新数据集名称', item.name)
+        if (!value || value === item.name) return
+        try { await fetchJson('/ams/api/dataset-rename', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: item.name, new_name: value }) }); await refresh(); setMessage('已重命名：' + value) } catch (error) { setMessage('重命名失败：' + String(error && error.message ? error.message : error)) }
+      }
+      const trash = async item => {
+        if (!window.confirm('把数据集 ' + item.name + ' 移入 data/trash？')) return
+        try { await fetchJson('/ams/api/dataset-trash', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: item.name }) }); await refresh(); setMessage('已移入回收站：' + item.name) } catch (error) { setMessage('移动失败：' + String(error && error.message ? error.message : error)) }
+      }
+      return h('div', null,
+        h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 } },
+          h('button', { onClick: () => void refresh(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 10px' } }, '刷新'),
+          h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '删除只移到 data/trash；训练在“音源炼制”页选择 processed 目录。')),
+        h('div', { style: cardStyle() },
+          h('h2', { style: { fontSize: 16, marginTop: 0 } }, '新建数据集'),
+          h('input', { value: source, onChange: e => setSource(e.target.value), placeholder: '源 wav 文件或目录（可用上传后的路径）', style: { width: '100%', padding: 7, marginBottom: 6, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5 } }),
+          h('input', { value: name, onChange: e => setName(e.target.value), placeholder: '数据集名称', style: { width: '100%', padding: 7, marginBottom: 6, background: COLORS.bg, color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5 } }),
+          h('button', { disabled: busy, onClick: () => void create(), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '5px 12px' } }, busy ? '提交中…' : '准备数据集'),
+          message ? h('div', { style: { color: message.indexOf('失败') >= 0 ? COLORS.err : COLORS.ok, fontSize: 12, marginTop: 6 } }, message) : null),
+        items.length === 0 ? h('div', { style: { color: COLORS.muted, fontSize: 13 } }, '暂无数据集。') : h('div', null, items.map(item => h('div', { key: item.name, style: { border: '1px solid ' + COLORS.border, borderRadius: 7, padding: 10, marginBottom: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+          h('b', null, item.name), h('span', { style: { color: COLORS.muted, fontSize: 12 } }, item.clip_count + ' 段 / ' + Math.round(item.total_seconds) + ' 秒'),
+          h('button', { onClick: () => props.onUse(item), style: { marginLeft: 'auto', background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '3px 8px' } }, '用于训练'),
+          h('button', { onClick: () => void rename(item), style: { background: 'transparent', color: COLORS.text, border: '1px solid ' + COLORS.border, borderRadius: 5, padding: '3px 8px' } }, '重命名'),
+          h('button', { onClick: () => void trash(item), style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '3px 8px' } }, '移入回收站')))))
+    }
+
     function TtsBatchPanel(props) {
       const models = props.models || []
       const busy = props.busy
@@ -1078,7 +1123,9 @@ window.__ModuleLoader__.load({
               },
               onClick: () => setActiveTab(item.id)
             }, item.label))),
-          activeTab === 'tts_batch'
+          activeTab === 'dataset'
+            ? h(DatasetStudioPanel, { consoleState: consoleState, onUse: item => { setForms(previous => Object.assign({}, previous, { train: Object.assign({}, previous.train, { dataset_dir: item.path + '\\processed' }) })); setActiveTab('train'); setMessages(previous => Object.assign({}, previous, { train: { ok: true, text: '已选择数据集：' + item.name } })) } })
+            : activeTab === 'tts_batch'
             ? h(TtsBatchPanel, { models: ttsModels, busy: ttsBatchBusy, message: ttsBatchMessage, onSubmit: (text, models) => { void submitTtsBatch(text, models) } })
             : activeTab === 'library'
             ? h(VoiceLibrary, { items: libraryVoices, meta: voiceMeta, busy: libraryBusy || previewBusy !== null, previews: voicePreviews, onChange: changeVoiceMeta, onSave: saveVoiceMeta, onTrash: trashVoice, onUse: useLibraryVoice, onPreview: (item) => { void previewLibraryVoice(item) }, onBindIndex: pickVoiceIndex, onUnbindIndex: (name) => { void unbindVoiceIndex(name) }, onImport: importVoicepack, onExport: (name) => { void exportVoicepack(name) }, onOpen: () => { void onOpenFolder('rvc_voices') } })

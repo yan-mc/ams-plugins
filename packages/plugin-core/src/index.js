@@ -157,6 +157,23 @@ function findPth(dir, depth = 0) {
   return null
 }
 
+
+function listDatasets() {
+  const root = join(resolveAmsHome(), 'datasets')
+  const result = []
+  let entries = []
+  try { entries = readdirSync(root) } catch { return result }
+  for (const name of entries) {
+    if (name.startsWith('_')) continue
+    const dir = join(root, name)
+    try { if (!statSync(dir).isDirectory()) continue } catch { continue }
+    let meta = {}
+    try { meta = JSON.parse(readFileSync(join(dir, 'dataset.json'), 'utf8')) } catch { /* no meta */ }
+    result.push({ name, clip_count: Number(meta.clip_count || 0), total_seconds: Number(meta.total_seconds || 0), created_at: meta.created_at || '', path: dir })
+  }
+  return result.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+}
+
 function exportVoicepack(name) {
   const source = join(resolveAmsHome(), 'voices', safeVoiceName(name))
   if (!existsSync(source) || !statSync(source).isDirectory()) throw new Error('音色不存在')
@@ -902,6 +919,31 @@ export function apply(ctx) {
             res.setHeader('content-length', String(buffer.length))
             res.end(buffer)
           } catch (error) { sendJson(res, 404, { ok: false, error: { code: 'ARTIFACT_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'datasets' && req.method === 'GET') { sendJson(res, 200, { ok: true, data: listDatasets() }); return }
+        if (joined === 'dataset-rename' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const oldName = String(body.name || ''); const newName = String(body.new_name || '')
+            if (!oldName || !newName || oldName.startsWith('_') || newName.startsWith('_')) throw new Error('非法名称')
+            const root = join(resolveAmsHome(), 'datasets'); const from = join(root, oldName); const to = join(root, newName)
+            if (!existsSync(from) || existsSync(to)) throw new Error('源不存在或目标已存在')
+            renameSync(from, to)
+            sendJson(res, 200, { ok: true, data: { name: newName } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'DATASET_RENAME_ERROR', message: String(error && error.message ? error.message : error) } }) }
+          return
+        }
+        if (joined === 'dataset-trash' && req.method === 'POST') {
+          try {
+            const body = await readJsonBody(req)
+            const name = String(body.name || '')
+            if (!name || name.startsWith('_')) throw new Error('非法名称')
+            const from = join(resolveAmsHome(), 'datasets', name)
+            if (!existsSync(from)) throw new Error('数据集不存在')
+            moveToTrash(from, 'datasets')
+            sendJson(res, 200, { ok: true, data: { name } })
+          } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'DATASET_TRASH_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
         }
         if (joined === 'schemas' && req.method === 'GET') {
