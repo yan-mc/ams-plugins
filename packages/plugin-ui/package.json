@@ -1,6 +1,6 @@
 {
   "name": "@ams/plugin-ui",
-  "version": "0.3.0",
+  "version": "1.0.0-rc.1",
   "type": "module",
   "description": "AMS Client plugin: full-page AMS console (Gateway health / jobs / progress) + sidebar entry (M0.6)",
   "license": "MIT",
