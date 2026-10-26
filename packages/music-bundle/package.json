@@ -1,6 +1,6 @@
 {
   "name": "@ams/music-bundle",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "type": "module",
   "description": "AMS music profile bundle: inserts @ams/plugin-core (Host) and @ams/plugin-ui (Client) rows",
   "license": "MIT",

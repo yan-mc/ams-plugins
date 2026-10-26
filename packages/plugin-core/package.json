@@ -1,6 +1,6 @@
 {
   "name": "@ams/plugin-core",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "type": "module",
   "description": "AMS Host plugin: music_ping / music_job_submit tools + Gateway bridge routes (M0.6)",
   "license": "MIT",
