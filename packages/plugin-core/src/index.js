@@ -81,7 +81,7 @@ function resolveAmsHome() {
 }
 
 
-const TEMPLATE_KINDS = new Set(['rvc', 'pymss', 'tts', 'msvc'])
+const TEMPLATE_KINDS = new Set(['rvc', 'pymss', 'msvc'])
 const SAFE_NAME = /^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$/
 
 function templatesRoot() { return join(resolveAmsHome(), 'config', 'templates') }
@@ -244,7 +244,6 @@ function importVoicepack(archive, requestedName) {
 
 const DATA_FOLDERS = {
   rvc_voices: 'voices',
-  tts_voices: 'tts_voices',
   artifacts: 'artifacts'
 }
 
@@ -443,7 +442,8 @@ async function gatewayRequest(path, options) {
 function gatewayHealth() { return gatewayRequest('/health') }
 function gatewayJobs(limit) { return gatewayRequest('/jobs?limit=' + String(limit)) }
 function gatewayVoices() { return gatewayRequest('/voices') }
-function gatewayTtsModels() { return gatewayRequest('/tts/models') }
+function gatewayTtsGsvVoices() { return gatewayRequest('/tts/gsv/voices') }
+function gatewayTtsGsvStatus() { return gatewayRequest('/tts/gsv/status') }
 function gatewayJob(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId)) }
 function gatewayArtifacts(jobId) { return gatewayRequest('/jobs/' + encodeURIComponent(jobId) + '/artifacts') }
 function gatewayCancel(jobId) {
@@ -1151,7 +1151,8 @@ export function apply(ctx) {
           } catch (error) { sendJson(res, 400, { ok: false, error: { code: 'VOICE_TRASH_ERROR', message: String(error && error.message ? error.message : error) } }) }
           return
         }
-        if (joined === 'tts/models' && req.method === 'GET') { sendJson(res, 200, await gatewayTtsModels()); return }
+        if (joined === 'tts-gsv/voices' && req.method === 'GET') { sendJson(res, 200, await gatewayTtsGsvVoices()); return }
+        if (joined === 'tts-gsv/status' && req.method === 'GET') { sendJson(res, 200, await gatewayTtsGsvStatus()); return }
         if (joined === 'health' && req.method === 'GET') { sendJson(res, 200, await gatewayHealth()); return }
         if (joined === 'open-folder' && req.method === 'POST') {
           try {

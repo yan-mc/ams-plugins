@@ -136,45 +136,45 @@ window.__ModuleLoader__.load({
         ]
       },
       {
-        id: 'tts', label: 'TTS 语音合成', jobType: 'tts.synthesize',
-        folder: { kind: 'tts_voices', label: '打开 TTS 音源目录', path: 'data/tts_voices' },
-        note: 'Piper 离线 TTS：文本提交给 Gateway，产物写入 data/artifacts。TTS 音源与变声音源分开，可放入 data/tts_voices。',
-        submitLabel: '开始合成',
+        id: 'tts_dataset_gsv', label: 'TTS 数据集（GSV）', jobType: 'tts.dataset.prepare.gsv',
+        note: '导入已有 GPT-SoVITS 数据集目录（wav/ + metadata.csv，filename|text），校验后复制到 data/tts-gsv/datasets/<名称>；不会覆盖已有数据集。',
+        submitLabel: '导入 GSV 数据集',
         fields: [
-          { key: 'text', label: '要合成的文本', kind: 'textarea', required: true, placeholder: '输入文本（最多 2000 字）' },
-          { key: 'model', label: 'TTS 模型', kind: 'select', optionsKey: 'ttsModels', placeholder: '留空使用默认模型' }
+          { key: 'source_path', label: '源数据集目录', placeholder: '含 wav/ 与 metadata.csv 的目录', required: true },
+          { key: 'dataset_name', label: '数据集名称', placeholder: 'xianyun_v5', required: true }
         ]
       },
       {
-        id: 'tts_dataset', label: 'TTS 数据集', jobType: 'tts.dataset.prepare',
-        note: '导入 metadata.csv + wav/，校验并复制到 data/datasets/tts/<名称>。',
-        submitLabel: '导入 TTS 数据集',
+        id: 'tts_train_gsv', label: 'TTS 音源炼制（GSV）', jobType: 'tts.train.gsv',
+        note: 'GPT-SoVITS V5turbo LoRA + GPT 训练：数据集需含 wav/ 与 metadata.csv（filename|text）；约 20–60 分钟，作业结束自动注册 voice_id 到 data/tts-gsv/voices。',
+        submitLabel: '开始 GSV 炼制',
         fields: [
-          { key: 'source_path', label: '源数据集目录', placeholder: '含 metadata.csv 与 wav/ 的目录', required: true },
-          { key: 'dataset_name', label: '数据集名称', placeholder: 'xianyun_tts', required: true }
+          { key: 'dataset_dir', label: '数据集目录', placeholder: 'data/datasets/tts/<名称>', required: true },
+          { key: 'voice_id', label: '音色 ID', placeholder: 'xianyun_v5', required: true },
+          { key: 'name', label: '显示名称', placeholder: '闲云 V5' },
+          { key: 'ref_audio', label: '参考音频（可选，3–10s）', placeholder: '留空自动从数据集选', importable: true },
+          { key: 'ref_text', label: '参考音频文本（可选）' },
+          { key: 'epochs_sovits', label: 'SoVITS epochs', kind: 'number', initial: '8' },
+          { key: 'epochs_gpt', label: 'GPT epochs', kind: 'number', initial: '10' }
         ]
       },
       {
-        id: 'tts_train', label: 'TTS 音源炼制', jobType: 'train.tts',
-        note: 'Piper/VITS 训练：数据集需含 metadata.csv 和 wav/；训练完成后自动注册到 data/tts_voices。',
-        submitLabel: '开始 TTS 炼制',
+        id: 'tts_gsv', label: 'TTS 语音合成（GSV）', jobType: 'tts.synthesize.gsv',
+        note: 'GPT-SoVITS V5turbo（48kHz，默认）/ V2ProPlus（32kHz，回退）。voice_id 对应 data/tts-gsv/voices/<id>；首次加载约 4 秒，作业结束自动释放 GPU。',
+        submitLabel: '开始 GSV 合成',
         fields: [
-          { key: 'dataset_dir', label: 'TTS 数据集目录', placeholder: 'data/datasets/tts/<名称>', required: true },
-          { key: 'model_name', label: '模型名', placeholder: '我的TTS音色', required: true },
-          { key: 'language', label: '语言/音素集', kind: 'select', options: ['cmn', 'en-us'], initial: 'cmn' },
-          { key: 'epochs', label: 'Epochs', kind: 'number', initial: '1' },
-          { key: 'batch_size', label: 'Batch size', kind: 'number', initial: '2' },
-          { key: 'base_checkpoint', label: '基础 checkpoint（可留空）', placeholder: 'data/runtime/tts-train/0.1.0/checkpoints/epoch=...ckpt' },
-          { key: 'quality', label: '质量', kind: 'select', options: ['medium', 'high'], initial: 'medium' }
+          { key: 'text', label: '要合成的文本', kind: 'textarea', required: true, placeholder: '输入文本（最多 20000 字）' },
+          { key: 'voice_id', label: '音色 ID', required: true, placeholder: '例如 xianyun_p0_v5turbo' },
+          { key: 'speed', label: '语速', kind: 'number', initial: '1.0' },
+          { key: 'seed', label: '随机种子', kind: 'number', initial: '42' }
         ]
       }
     ]
 
     const VC_TAB = { id: 'realtime', label: '实时变声', jobType: null, fields: [], note: '实时变声：独立 VC 服务，麦克风/系统输出 → RVC → VB-Cable。' }
     const LIBRARY_TAB = { id: 'library', label: '音色库', jobType: null, fields: [], note: '音色库：标签、备注、收藏、index 状态；删除只移动到 data/trash。' }
-    const TTS_BATCH_TAB = { id: 'tts_batch', label: 'TTS 批量', jobType: null, fields: [], note: '同一文本批量合成多个 TTS 音色。' }
     const PROJECT_TAB = { id: 'project', label: '项目', jobType: null, fields: [], note: '工程、步骤和产物关联。' }
-    const ALL_TABS = [PROJECT_TAB, VC_TAB, LIBRARY_TAB, TTS_BATCH_TAB].concat(FEATURE_TABS)
+    const ALL_TABS = [PROJECT_TAB, VC_TAB, LIBRARY_TAB].concat(FEATURE_TABS)
 
     function cardStyle(extra) {
       return Object.assign({
@@ -685,31 +685,16 @@ window.__ModuleLoader__.load({
           h('button', { onClick: () => void trash(item), style: { background: 'transparent', color: COLORS.err, border: '1px solid ' + COLORS.err, borderRadius: 5, padding: '3px 8px' } }, '移入回收站')))))
     }
 
-    function TtsBatchPanel(props) {
-      const models = props.models || []
-      const busy = props.busy
-      const message = props.message
-      const [text, setText] = React.useState('')
-      const [selected, setSelected] = React.useState([])
-      const toggle = value => setSelected(previous => previous.indexOf(value) >= 0 ? previous.filter(item => item !== value) : previous.concat([value]))
-      return h('div', { style: cardStyle() },
-        h('div', { style: { color: COLORS.muted, fontSize: 12, marginBottom: 10 } }, '同一段文本批量合成到多个 TTS 模型；每个模型生成独立任务和产物。'),
-        h('textarea', { value: text, onChange: event => setText(event.target.value), placeholder: '输入文本（最多 2000 字）', style: { width: '100%', minHeight: 100, padding: 8, borderRadius: 6, border: '1px solid ' + COLORS.border, background: COLORS.bg, color: COLORS.text } }),
-        h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 10 } }, models.map(item => h('label', { key: item.value, style: { color: COLORS.text, fontSize: 12 } }, h('input', { type: 'checkbox', checked: selected.indexOf(item.value) >= 0, onChange: () => toggle(item.value) }), ' ' + item.label))),
-        h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 } },
-          h('button', { type: 'button', disabled: busy || !text.trim() || selected.length === 0, onClick: () => props.onSubmit(text, selected), style: { background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 13 } }, busy ? '提交中…' : '批量合成'),
-          h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '已选 ' + selected.length + ' 个模型'),
-          message ? h('span', { style: { color: message.ok ? COLORS.ok : COLORS.err, fontSize: 12 } }, message.text) : null)
-      )
-    }
     function VoiceLibrary(props) {
       const items = props.items || []
+      const gsvItems = props.gsvVoices || []
       const meta = props.meta || {}
       const busy = props.busy
       const onChange = props.onChange
       const onSave = props.onSave
       const onTrash = props.onTrash
       const onUse = props.onUse
+      const onUseGsv = props.onUseGsv
       const onOpen = props.onOpen
       const onPreview = props.onPreview
       const onBindIndex = props.onBindIndex
@@ -718,6 +703,17 @@ window.__ModuleLoader__.load({
       const onExport = props.onExport
       const previews = props.previews || {}
       return h('div', null,
+        h('div', { style: { border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 12, marginBottom: 16 } },
+          h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' } },
+            h('b', { style: { fontSize: 14 } }, 'GPT-SoVITS 音色（新管线）'),
+            h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '默认 V5turbo；来自 data/tts-gsv/voices'),
+            h('span', { style: { color: COLORS.muted, fontSize: 12, marginLeft: 'auto' } }, '共 ' + gsvItems.length + ' 个')),
+          gsvItems.length === 0 ? h('div', { style: { color: COLORS.warn, fontSize: 13 } }, '暂无 GPT-SoVITS 音色；先在“TTS 音源炼制（GSV）”训练，或放入 data/tts-gsv/voices/<id>/voice.json。') : null,
+          gsvItems.map(item => h('div', { key: item.id, style: { border: '1px solid ' + COLORS.border, borderRadius: 6, padding: 9, marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+            h('b', null, item.name || item.id),
+            h('span', { style: { color: COLORS.muted, fontSize: 12 } }, item.version + ' / ' + (item.language || 'zh')),
+            h('code', { style: { color: COLORS.muted, fontSize: 11 } }, item.id),
+            h('button', { type: 'button', disabled: busy, onClick: () => onUseGsv(item), style: { marginLeft: 'auto', background: COLORS.accent, color: '#fff', border: 'none', borderRadius: 5, padding: '4px 9px', fontSize: 12 } }, '用于 GSV 合成')))),
         h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 } },
           h('span', { style: { color: COLORS.muted, fontSize: 12 } }, '共 ' + items.length + ' 个音源；删除只移动到 data/trash，不物理删除。'),
           h('button', { type: 'button', onClick: onOpen, style: { background: 'transparent', color: COLORS.accent, border: '1px solid ' + COLORS.accent, borderRadius: 5, padding: '4px 10px', fontSize: 12 } }, '打开音源目录'),
@@ -760,9 +756,9 @@ window.__ModuleLoader__.load({
       const [busyTab, setBusyTab] = React.useState(null)
       const [messages, setMessages] = React.useState({})
       const [voices, setVoices] = React.useState([])
-      const [ttsModels, setTtsModels] = React.useState([])
       const [templates, setTemplates] = React.useState([])
       const [libraryVoices, setLibraryVoices] = React.useState([])
+      const [gsvVoices, setGsvVoices] = React.useState([])
       const [voiceMeta, setVoiceMeta] = React.useState({})
       const [libraryBusy, setLibraryBusy] = React.useState(false)
       const [voicePreviews, setVoicePreviews] = React.useState({})
@@ -774,8 +770,6 @@ window.__ModuleLoader__.load({
       const [abOriginal, setAbOriginal] = React.useState('')
       const [abConverted, setAbConverted] = React.useState('')
       const [eBusy, setEBusy] = React.useState(false)
-      const [ttsBatchBusy, setTtsBatchBusy] = React.useState(false)
-      const [ttsBatchMessage, setTtsBatchMessage] = React.useState(null)
       const [cancelBusy, setCancelBusy] = React.useState(null)
       const [connection, setConnection] = React.useState(null)
       const [connBase, setConnBase] = React.useState('')
@@ -818,6 +812,11 @@ window.__ModuleLoader__.load({
             const list = value && value.data && Array.isArray(value.data.models) ? value.data.models : []
             setTtsModels(list.map(model => ({ label: model.name, value: model.path })))
           } catch (error) { /* tts models are optional */ }
+          try {
+            const value = await fetchJson('/ams/api/tts-gsv/voices')
+            const list = value && value.data && Array.isArray(value.data.items) ? value.data.items : []
+            setGsvVoices(list)
+          } catch (error) { /* gsv voices are optional */ }
           try {
             const value = await fetchJson('/ams/api/templates')
             setTemplates(value && value.data && Array.isArray(value.data) ? value.data : [])
@@ -914,14 +913,6 @@ window.__ModuleLoader__.load({
         } catch (error) { setVcMessage({ ok: false, text: '停止失败：' + String(error && error.message ? error.message : error) }) }
         finally { setVcBusy(false) }
       }
-      React.useEffect(() => {
-        if (ttsModels.length === 0) return
-        setForms(previous => {
-          if (previous.tts && previous.tts.model) return previous
-          return Object.assign({}, previous, { tts: Object.assign({}, previous.tts, { model: ttsModels[0].value }) })
-        })
-      }, [ttsModels])
-
       const saveConnection = async () => {
         setConnBusy(true)
         setConnMessage('')
@@ -938,7 +929,7 @@ window.__ModuleLoader__.load({
         finally { setConnBusy(false) }
       }
 
-      const templateKind = activeTab === 'separate' ? 'pymss' : (activeTab === 'convert' ? 'rvc' : (activeTab === 'tts' ? 'tts' : (activeTab === 'msvc' ? 'msvc' : '')))
+      const templateKind = activeTab === 'separate' ? 'pymss' : (activeTab === 'convert' ? 'rvc' : (activeTab === 'msvc' ? 'msvc' : ''))
       const activeTemplates = templates.filter(item => item.kind === templateKind)
       const saveTemplate = async (name, params) => {
         try {
@@ -990,17 +981,10 @@ window.__ModuleLoader__.load({
         setActiveTab('convert')
         setMessages(previous => Object.assign({}, previous, { convert: { ok: true, text: '已选择音色：' + item.name } }))
       }
-      const submitTtsBatch = async (text, models) => {
-        if (!text.trim() || models.length === 0) return
-        setTtsBatchBusy(true)
-        const ids = []
-        const errors = []
-        for (const model of models) {
-          const result = await consoleState.submitJob('tts.synthesize', { text: text.trim(), model })
-          if (result.ok) ids.push(result.job.id); else errors.push(model + ': ' + result.message)
-        }
-        setTtsBatchBusy(false)
-        setTtsBatchMessage(ids.length > 0 ? { ok: errors.length === 0, text: '已提交 ' + ids.length + ' 个任务：' + ids.join(', ') + (errors.length ? '；失败：' + errors.join('; ') : '') } : { ok: false, text: errors.join('; ') || '提交失败' })
+      const useGsvVoice = item => {
+        setForms(previous => Object.assign({}, previous, { tts_gsv: Object.assign({}, previous.tts_gsv, { voice_id: item.id }) }))
+        setActiveTab('tts_gsv')
+        setMessages(previous => Object.assign({}, previous, { tts_gsv: { ok: true, text: '已选择 GPT-SoVITS 音色：' + (item.name || item.id) } }))
       }
       const previewLibraryVoice = async item => {
         setPreviewBusy(item.name)
@@ -1159,8 +1143,8 @@ window.__ModuleLoader__.load({
       const tools = summary && Array.isArray(summary.tools) ? summary.tools : []
       const jobs = summary && Array.isArray(summary.jobs) ? summary.jobs : []
       const gatewayOk = Boolean(gateway && gateway.ok)
-      const tab = activeTab === 'realtime' ? VC_TAB : (activeTab === 'library' ? LIBRARY_TAB : (activeTab === 'tts_batch' ? TTS_BATCH_TAB : (FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0])))
-      const form = activeTab === 'realtime' ? vcForm : (activeTab === 'library' || activeTab === 'tts_batch' ? {} : forms[tab.id])
+      const tab = activeTab === 'realtime' ? VC_TAB : (activeTab === 'library' ? LIBRARY_TAB : (FEATURE_TABS.find(item => item.id === activeTab) || FEATURE_TABS[0]))
+      const form = activeTab === 'realtime' ? vcForm : (activeTab === 'library' ? {} : forms[tab.id])
 
       const onChange = (key, value) => {
         if (activeTab === 'realtime') {
@@ -1343,10 +1327,8 @@ window.__ModuleLoader__.load({
             ? h(MixTrackPanel, { consoleState: consoleState })
             : activeTab === 'dataset'
             ? h(DatasetStudioPanel, { consoleState: consoleState, onUse: item => { setForms(previous => Object.assign({}, previous, { train: Object.assign({}, previous.train, { dataset_dir: item.path + '\\processed' }) })); setActiveTab('train'); setMessages(previous => Object.assign({}, previous, { train: { ok: true, text: '已选择数据集：' + item.name } })) } })
-            : activeTab === 'tts_batch'
-            ? h(TtsBatchPanel, { models: ttsModels, busy: ttsBatchBusy, message: ttsBatchMessage, onSubmit: (text, models) => { void submitTtsBatch(text, models) } })
             : activeTab === 'library'
-            ? h(VoiceLibrary, { items: libraryVoices, meta: voiceMeta, busy: libraryBusy || previewBusy !== null, previews: voicePreviews, onChange: changeVoiceMeta, onSave: saveVoiceMeta, onTrash: trashVoice, onUse: useLibraryVoice, onPreview: (item) => { void previewLibraryVoice(item) }, onBindIndex: pickVoiceIndex, onUnbindIndex: (name) => { void unbindVoiceIndex(name) }, onImport: importVoicepack, onExport: (name) => { void exportVoicepack(name) }, onOpen: () => { void onOpenFolder('rvc_voices') } })
+            ? h(VoiceLibrary, { items: libraryVoices, gsvVoices: gsvVoices, meta: voiceMeta, busy: libraryBusy || previewBusy !== null, previews: voicePreviews, onChange: changeVoiceMeta, onSave: saveVoiceMeta, onTrash: trashVoice, onUse: useLibraryVoice, onUseGsv: useGsvVoice, onPreview: (item) => { void previewLibraryVoice(item) }, onBindIndex: pickVoiceIndex, onUnbindIndex: (name) => { void unbindVoiceIndex(name) }, onImport: importVoicepack, onExport: (name) => { void exportVoicepack(name) }, onOpen: () => { void onOpenFolder('rvc_voices') } })
             : activeTab === 'realtime'
             ? h(VcPanel, {
                 devices: vcDevices, status: vcStatus, form: vcForm, busy: vcBusy, message: vcMessage,
@@ -1354,7 +1336,7 @@ window.__ModuleLoader__.load({
               })
             : h(FeatureTab, {
                 tab: tab, form: form, summary: summary, message: messages[tab.id],
-                busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices, ttsModels: ttsModels },
+                busy: busyTab === tab.id, onChange: onChange, onSubmit: onSubmit, onImport: onImport, onOpenFolder: onOpenFolder, onPickFile: onPickFile, dynamicOptions: { voices: voices },
                 templates: activeTemplates, onSaveTemplate: saveTemplate, onApplyTemplate: applyTemplate, onDeleteTemplate: deleteTemplate, onImportTemplate: () => importTemplate(templateKind)
               })),
 

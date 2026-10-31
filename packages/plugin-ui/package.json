@@ -1,6 +1,6 @@
 {
   "name": "@ams/plugin-ui",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "description": "AMS Client plugin: full-page AMS console (Gateway health / jobs / progress) + sidebar entry (M0.6)",
   "license": "MIT",
@@ -41,6 +41,6 @@
       "network"
     ],
     "hardened": "M1: bearer/session auth + SSE",
-    "features": "M1 pages: train/separate/convert/remix/TTS placeholder + job list/cancel"
+    "features": "M1 pages: train/separate/convert/remix + GPT-SoVITS TTS (V5turbo)"
   }
 }
