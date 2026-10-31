@@ -808,11 +808,6 @@ window.__ModuleLoader__.load({
             } catch (error) { /* metadata optional */ }
           } catch (error) { /* voices are optional */ }
           try {
-            const value = await fetchJson('/ams/api/tts/models')
-            const list = value && value.data && Array.isArray(value.data.models) ? value.data.models : []
-            setTtsModels(list.map(model => ({ label: model.name, value: model.path })))
-          } catch (error) { /* tts models are optional */ }
-          try {
             const value = await fetchJson('/ams/api/tts-gsv/voices')
             const list = value && value.data && Array.isArray(value.data.items) ? value.data.items : []
             setGsvVoices(list)
